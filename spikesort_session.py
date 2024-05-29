@@ -7,24 +7,9 @@ from spikeinterface import extractors as se
 from spikeinterface import sorters as ss
 
 # %% Global variables
-KILOSORT_FOLDER = "../data/raw_data/Kilosort"
+EPHYS_PATH = Path("../data/raw_data/ephys")
+KILOSORT_FOLDER = Path("../data/preprocessed_data/Kilosort")
 
-TEST_SESSIONS = [
-    "../data/raw_data/ephys/mEC_6/2024-02-20_12-55-26",
-    "../data/raw_data/ephys/mEC_6/2024-02-20_14-22-35",
-    "../data/raw_data/ephys/mEC_6/2024-02-24_12-42-47",
-    "../data/raw_data/ephys/mEC_6/2024-02-24_14-14-18",
-    "../data/raw_data/ephys/mEC_6/2024-02-27_12-13-53",
-    "../data/raw_data/ephys/mEC_6/2024-02-27_13-46-14",
-    "../data/raw_data/ephys/mEC_6/2024-03-09_14-34-06",
-    "../data/raw_data/ephys/mEC_6/2024-03-09_16-07-05",
-    "../data/raw_data/ephys/mEC_6/2024-03-17_11-30-10",
-    "../data/raw_data/ephys/mEC_6/2024-03-17_12-57-33",
-    "../data/raw_data/ephys/mEC_6/2024-03-18_12-23-37",
-    "../data/raw_data/ephys/mEC_6/2024-03-18_14-15-04",
-]
-
-TROUBLESHOOT_SESSION = "../data/raw_data/ephys/mEC_6/2024-02-20_12-55-26/Record Node 101/experiment1/recording1/continuous/Neuropix-PXI-100.mEC6-AP/continuous.dat"
 
 # %% Functions
 
@@ -45,4 +30,11 @@ def spikesort_session(ephys_path, specified_output_folder=False):
     sorting = ss.run_sorter(
         sorter_name="kilosort4", recording=raw_AP, output_folder=str(output_folder), **sorting_params
     )
+    return
+
+
+def get_ephys_paths_df():
+    """
+    Returns a pandas DataFrame with data extracted from raw ephys data folders.
+    """
     return
