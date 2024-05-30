@@ -1,2 +1,2 @@
 kilosort
-spikeinterface[full, widgets]
+spikeinterface[full,widgets]
