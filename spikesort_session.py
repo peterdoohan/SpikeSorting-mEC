@@ -42,7 +42,7 @@ def get_ephys_paths_df():
     """
     Returns a pandas DataFrame with data extracted from raw ephys data folders.
     """
-    all_ephys_paths = [f for d in EPHYS_PATH.iterdir() if d.is_dir() and d.name == "mEC_8" for f in d.iterdir()]
+    all_ephys_paths = [f for d in EPHYS_PATH.iterdir() if d.is_dir() for f in d.iterdir()]
     ephys_paths_info = []
     for ephys_path in all_ephys_paths:
         print(ephys_path)
