@@ -68,11 +68,8 @@ def preprocess_session_LFP(
 ):
     """"""
     raw_LFP = se.read_openephys(ephys_path, stream_name=LFP_stream_name)
-    phase_shifted_data = sp.phase_shift(recording=raw_LFP)
-    downchanneled_LFP = phase_shifted_data.channel_slice(
-        channel_ids=raw_LFP.get_channel_ids()[::channel_downsample_factor]
-    )
-    bp_recording_LFP = sp.bandpass_filter(recording=downchanneled_LFP, freq_max=bandpass_max)
+    downchanneled_LFP = raw_LFP.channel_slice(channel_ids=raw_LFP.get_channel_ids()[::channel_downsample_factor])
+    bp_recording_LFP = sp.bandpass_filter(recording=downchanneled_LFP, freq_min=0.1, freq_max=bandpass_max)
     downsampled_LFP = sp.resample(recording=bp_recording_LFP, resample_rate=downsample_frequency)
     return downsampled_LFP
 
@@ -103,7 +100,7 @@ def get_ephys_paths_df():
             separately to the standard pipeline. This can occur if recordings were quickly aborted and timestamp.npy files are empty. See column
             spikeinterface_readable, boolian.
     """
-    all_ephys_paths = [f for d in EPHYS_PATH.iterdir() if d.is_dir() for f in d.iterdir()]
+    all_ephys_paths = [f for d in EPHYS_PATH.iterdir() if d.is_dir() for f in d.iterdir() if f.is_dir()]
     ephys_paths_info = []
     for ephys_path in all_ephys_paths:
         print(ephys_path)
