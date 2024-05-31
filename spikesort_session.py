@@ -62,16 +62,32 @@ def spikesort_session():
 def preprocess_session_LFP(
     ephys_path,
     LFP_stream_name,
-    channel_downsample_factor=4,
+    channel_downsample_factor=8,
     bandpass_max=450,
     downsample_frequency=1000,
 ):
-    """"""
+    """
+    Function to extract and process LFP data from raw open-ephys data.
+    Steps: 1) Load raw LFP data with spikeinterface
+           2) Subselect channels from neuropixel probe. Defualt = 8 which is every 80um vertically
+           3) Bandpass filter LFP data (also de-means data)
+           4) Downsample LFP data
+           5) Convert LFP data to float16, units = uV
+    Args:
+        ephys_path (Path): Path to raw ephys data folder
+        LFP_stream_name (str): Name of LFP stream in open-ephys data
+        channel_downsample_factor (int): Factor to downsample channels by
+        bandpass_max (int): Maximum frequency for bandpass filter
+        downsample_frequency (int): Frequency to downsample LFP data to
+    """
+    # load and preprocess LFP data with spikeinterface
     raw_LFP = se.read_openephys(ephys_path, stream_name=LFP_stream_name)
     downchanneled_LFP = raw_LFP.channel_slice(channel_ids=raw_LFP.get_channel_ids()[::channel_downsample_factor])
     bp_recording_LFP = sp.bandpass_filter(recording=downchanneled_LFP, freq_min=0.1, freq_max=bandpass_max)
     downsampled_LFP = sp.resample(recording=bp_recording_LFP, resample_rate=downsample_frequency)
-    return downsampled_LFP
+    lfp_np32 = downsampled_LFP.get_traces(return_scaled=True)  # units = uV
+    lfp_np16 = lfp_np32.astype(np.float16)  # minimal loss of precision while decreasing file size
+    return lfp_np16
 
 
 # %% Functions
