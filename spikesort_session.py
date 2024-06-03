@@ -107,6 +107,8 @@ def spikesort_session(
             chunk_duration="1s",
             progress_bar=True,
         )
+    # Run Kilosort4
+
     return preprocessed_AP
 
 
