@@ -5,6 +5,7 @@ import numpy as np
 import pandas as pd
 from pathlib import Path
 from datetime import datetime as dt
+import matplotlib.pyplot as plt
 from spikeinterface import extractors as se
 from spikeinterface import sorters as ss
 from spikeinterface import preprocessing as sp
@@ -59,6 +60,8 @@ def spikesort_session(
     remove_bad_channels=False,
     denoise="destripe",
     save_temp_preprocessed_data=True,
+    sorting=False,
+    save_qc_figs=True,
 ):
     """
     Function runs Kilosort4 on a single ephys session, saving the results to the preprocessed_data/Kilosort folder.
@@ -77,6 +80,10 @@ def spikesort_session(
     - STEP 9 - Save out spike sorting results
     - STEP 10 - Remove temp preprocessed data
     """
+    # set up output folder
+    subject, datetime_string = ephys_path.parts[-2:]
+    output_folder = KILOSORT_PATH / subject / datetime_string
+    output_folder.mkdir(parents=True, exist_ok=True)
     # preprocess ephys data with spikeinterface
     raw_AP = se.read_openephys(ephys_path, stream_name=AP_stream_name)
     all_channel_ids = raw_AP.get_channel_ids()
@@ -95,21 +102,37 @@ def spikesort_session(
         preprocessed_AP = sp.highpass_spatial_filter(preprocessed_AP)
     if remove_bad_channels:
         preprocessed_AP = preprocessed_AP.remove_channels(bad_channels)
+    if save_qc_figs:
+        preprocessing_fig, axs = plt.subplots(ncols=2, figsize=(20, 10))
+        sw.plot_traces(raw_AP, backend="matplotlib", clim=(-500, 500), ax=axs[0])
+        sw.plot_traces(preprocessed_AP, backend="matplotlib", clim=(-500, 500), ax=axs[1])
+        for ax, label in zip(axs, ["Raw", "Preprocessed"]):
+            ax.set_tile(label)
+            ax.set_xlabel("Time (s)")
+        preprocessing_fig.savefig(output_folder / "figs" / "preprocessed_traces.png")
     # Save preprocessed .dat file
-    subject, datetime_string = ephys_path.parts[-2:]
-    output_folder = KILOSORT_PATH / subject / datetime_string
-    output_folder.mkdir(parents=True, exist_ok=True)
     if save_temp_preprocessed_data:
         preprocessed_AP.save(
-            folder=output_folder / "preprocessed_AP.dat",
+            folder=output_folder / "preprocessed_temp",
             format="binary",
             n_jobs=40,
             chunk_duration="1s",
             progress_bar=True,
         )
     # Run Kilosort4
+    if sorting:
+        sorting_params = ss.get_default_sorter_params("kilosort4")
+        sorting_params["skip_kilosort_preprocessing"] = True
+        sorting_params["do_correction"] = True
+        sorting = ss.run_sorter(
+            "kilosort4",
+            recording=preprocessed_AP,
+            output_folder=output_folder / "kilosort4",
+            verbose=True,
+            **sorting_params,
+        )
 
-    return preprocessed_AP
+    return print(f"Session {subject} {datetime_string} spikesorted with Kilosort4")
 
 
 # %% Functions
