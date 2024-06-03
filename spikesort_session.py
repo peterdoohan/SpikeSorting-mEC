@@ -52,11 +52,62 @@ def run_ephys_preprocessing():
 
 
 # %%
-def spikesort_session():
-    return
+def spikesort_session(
+    ephys_path,
+    AP_stream_name,
+    interpolate_bad_channels=True,
+    remove_bad_channels=False,
+    denoise="destripe",
+    save_temp_preprocessed_data=True,
+):
+    """
+    Function runs Kilosort4 on a single ephys session, saving the results to the preprocessed_data/Kilosort folder.
 
+    Spike sorting is run with the following preprocessing steps
+    - STEP 1 - Phase shift correction (accounts for time between sampling neuropixel data across channels)
+    - STEP 2 - Bandpass filter
+    - STEP 3 - Detect and remove channels outside the brain
+    - STEP 4 - Detect and interpolate bad channels
+    - STEP 5 - Denoise with common average referencing or IBL stripe protocol
+    - STEP 6 - Motion correction
+    - STEP 7 - Save out temp preprocessed data (session Kilosort folder)
 
-# %% Extract LFP
+    and the following spike sorting steps:
+    - STEP 8 - Spike Sorting with Kilosort4 from sacved preprocessed daa
+    - STEP 9 - Save out spike sorting results
+    - STEP 10 - Remove temp preprocessed data
+    """
+    # preprocess ephys data with spikeinterface
+    raw_AP = se.read_openephys(ephys_path, stream_name=AP_stream_name)
+    all_channel_ids = raw_AP.get_channel_ids()
+    phase_shift_AP = sp.phase_shift(raw_AP)
+    highpass_AP = sp.highpass_filter(phase_shift_AP, freq_min=300)
+    _, channel_labels = sp.detect_bad_channels(highpass_AP)
+    preprocessed_AP = highpass_AP.remove_channels(all_channel_ids[channel_labels == "out"])
+    bad_channels = np.concatenate(
+        [all_channel_ids[channel_labels == "noise"], all_channel_ids[channel_labels == "dead"]]
+    )
+    if interpolate_bad_channels:
+        preprocessed_AP = sp.interpolate_bad_channels(preprocessed_AP, bad_channel_ids=bad_channels)
+    if denoise == "CAR":
+        preprocessed_AP = sp.common_reference(preprocessed_AP)
+    elif denoise == "destripe":
+        preprocessed_AP = sp.highpass_spatial_filter(preprocessed_AP)
+    if remove_bad_channels:
+        preprocessed_AP = preprocessed_AP.remove_channels(bad_channels)
+    # Save preprocessed .dat file
+    subject, datetime_string = ephys_path.parts[-2:]
+    output_folder = KILOSORT_PATH / subject / datetime_string
+    output_folder.mkdir(parents=True, exist_ok=True)
+    if save_temp_preprocessed_data:
+        preprocessed_AP.save(
+            folder=output_folder / "preprocessed_AP.dat",
+            format="binary",
+            n_jobs=40,
+            chunk_duration="1s",
+            progress_bar=True,
+        )
+    return preprocessed_AP
 
 
 # %% Functions
