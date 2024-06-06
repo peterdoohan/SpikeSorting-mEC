@@ -30,7 +30,6 @@ git clone https://github.com/MouseLand/Kilosort.git
 ```
 git checkout v3.0.2
 mv Kilosort Kilosort3
-
 ```
 ```
 module load matlab/R2021a
