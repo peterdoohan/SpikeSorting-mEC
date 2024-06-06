@@ -169,7 +169,7 @@ def run_Kilosort4(preprocessed_rec, temp_preprocessed_dir, Kilosort_dir):
     raw_data_file = list(temp_preprocessed_dir.rglob("*.raw"))[0]
     sorter_output_dir = Kilosort_dir / "sorter_output"  # match output when using spikeinterface
     sorter_output_dir.mkdir(parents=True, exist_ok=True)
-    ops, st, clu, tF, Wall, similar_templates, is_ref, est_contam_rate = run_kilosort(
+    outputs = run_kilosort(
         settings={"fs": sample_freq, "n_chan_bin": n_channels},
         probe=probe,
         filename=raw_data_file,
