@@ -10,6 +10,7 @@ from spikeinterface import extractors as se
 from spikeinterface import sorters as ss
 from spikeinterface import preprocessing as sp
 from spikeinterface import widgets as sw
+from kilosort import io
 
 # %% Global variables
 EPHYS_PATH = Path("../data/raw_data/ephys")
@@ -53,6 +54,8 @@ def run_ephys_preprocessing():
 
 
 # %%
+
+
 def spikesort_session(
     ephys_path,
     AP_stream_name,
