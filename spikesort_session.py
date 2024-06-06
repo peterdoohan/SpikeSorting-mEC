@@ -220,8 +220,8 @@ def run_Kilosort3(preprocessed_AP, Kilosort_dir):
 
 def postprocess_ephys_data(preprocessed_rec, sorter, report_path):
     """Computes quality metrics and saves report for spike sorted data"""
-    analyzer = create_sorting_analyzer(sorter, preprocessed_rec, sparse=True, format="memory", n_jobs=40)
-    job_kwargs = dict(n_jobs=40, chunk_duration="1s", progress_bar=True)
+    analyzer = create_sorting_analyzer(sorter, preprocessed_rec, sparse=True, format="memory", n_jobs=80)
+    job_kwargs = dict(n_jobs=80, chunk_duration="2s", progress_bar=True)
     analyzer.compute("random_spikes", method="uniform", max_spikes_per_unit=500)
     analyzer.compute("waveforms", ms_before=1.5, ms_after=2.0, **job_kwargs)
     analyzer.compute("templates", operators=["average", "median", "std"])
