@@ -6,37 +6,30 @@ import pandas as pd
 from pathlib import Path
 from datetime import datetime as dt
 import matplotlib.pyplot as plt
+import matplotlib.gridspec as gridspec
 from spikeinterface import extractors as se
 from spikeinterface import sorters as ss
 from spikeinterface import preprocessing as sp
 from spikeinterface import widgets as sw
+from spikeinterface import qualitymetrics as sq
+from spikeinterface import exporters as sx
+from kilosort import io
+from kilosort import run_kilosort
+
+from spikeinterface.core import load_extractor, create_sorting_analyzer
+
+from probeinterface import ProbeGroup, write_prb
 
 # %% Global variables
 EPHYS_PATH = Path("../data/raw_data/ephys")
 KILOSORT_PATH = Path("../data/preprocessed_data/Kilosort")
 LFP_PATH = Path("../data/preprocessed_data/LFP")
 
+ss.Kilosort3Sorter.set_kilosort3_path("./Kilosort3")
 
-# %% Functions
-
-
-# def spikesort_session(ephys_path, specified_output_folder=False):
-#     """
-#     Function takes an ephys_path as input and spikesorts the session. Currently the function
-#     run default Kilosort4 sorting, but can be extended to run non-kilosort preprocessing etc.
-#     """
-#     # define output folder:
-#     subject, collection_datetime = Path(ephys_path).parts[-2:]
-#     sortname = specified_output_folder if specified_output_folder else dt.now().isoformat()
-#     output_folder = Path(KILOSORT_FOLDER) / subject / collection_datetime / sortname
-#     # Load data with spikeinterface
-#     raw_AP = se.read_openephys(ephys_path, stream_id="0")  # stream_id 0 is AP data, 1 is LFP data
-#     sorting_params = ss.get_default_sorter_params("kilosort4")
-#     # Run kilosort4 with defualt parameters
-#     sorting = ss.run_sorter(
-#         sorter_name="kilosort4", recording=raw_AP, output_folder=str(output_folder), **sorting_params
-#     )
-#     return
+# ephys_path = Path('../data/raw_data/ephys/mEC_8/2024-02-22_18-08-35')
+# AP_stream_name = 'Record Node 101#Neuropix-PXI-100.mEC8-AP'
+#
 
 
 # %% Top level function
@@ -53,6 +46,127 @@ def run_ephys_preprocessing():
 
 
 # %%
+def post_processing(preprocessed_path, kilosort_path):
+    """ """
+    preprocessed_recording = load_extractor(preprocessed_path)
+    sorting = se.read_kilosort(kilosort_path)
+    analyzer = create_sorting_analyzer(sorting, preprocessed_recording, sparse=True, format="memory", n_jobs=40)
+    job_kwargs = dict(n_jobs=40, chunk_duration="1s", progress_bar=True)
+    analyzer.compute("random_spikes", method="uniform", max_spikes_per_unit=500)
+    analyzer.compute("waveforms", ms_before=1.5, ms_after=2.0, **job_kwargs)
+    analyzer.compute("templates", operators=["average", "median", "std"])
+    analyzer.compute("noise_levels")
+    analyzer.compute("correlograms")
+    analyzer.compute("unit_locations")
+    analyzer.compute("spike_amplitudes", **job_kwargs)
+    analyzer.compute("principal_components", **job_kwargs)
+    analyzer.compute("spike_locations", **job_kwargs)
+    metric_names = sq.get_quality_metric_list() + sq.get_quality_pca_metric_list()
+    metrics = sq.compute_quality_metrics(analyzer, metric_names=metric_names)
+    sx.export_report(analyzer, preprocessing_path.parent / "report", **job_kwargs)
+    sx.export_to_phy()
+
+    return
+
+
+def spikesort_session2(ephys_path, AP_stream_name, run_kilosort4=True):
+    subject, datetime_string = ephys_path.parts[-2:]
+    output_folder = KILOSORT_PATH / subject / datetime_string
+    output_folder.mkdir(parents=True, exist_ok=True)
+    # preprocess ephys data with spikeinterface
+    raw_AP = se.read_openephys(ephys_path, stream_name=AP_stream_name)
+    all_channel_ids = raw_AP.get_channel_ids()
+    phase_shift_AP = sp.phase_shift(raw_AP)
+    # highpass_AP = sp.highpass_filter(phase_shift_AP, freq_min=300)
+    _, channel_labels = sp.detect_bad_channels(phase_shift_AP)
+    preprocessed_AP = phase_shift_AP.remove_channels(all_channel_ids[channel_labels == "out"])
+    bad_channels = np.concatenate(
+        [all_channel_ids[channel_labels == "noise"], all_channel_ids[channel_labels == "dead"]]
+    )
+    preprocessed_AP = sp.interpolate_bad_channels(preprocessed_AP, bad_channel_ids=bad_channels)
+    preprocessed_AP = sp.highpass_spatial_filter(preprocessed_AP)
+    preprocessed_AP.channel_ids
+    # save preprocessed AP signal with spikeinterface
+    print(f"Saving preprocessed data to {output_folder}")
+    temp_output_folder = output_folder / "preprocessed_temp"
+    preprocessed_AP.save(
+        folder=temp_output_folder,
+        format="binary",
+        n_jobs=40,
+        chunk_duration="1s",
+        progress_bar=True,
+        overwrite=True,
+    )
+    if run_kilosort4:
+        run_kilosort4(preprocessed_AP, output_folder)
+    if run_kilosort3:
+        run_kilosort3(preprocessed_AP, output_folder)
+
+    return
+
+
+def run_kilosort4(preprocessed_AP, output_folder):
+    """
+    Runs kilosort4 without spikeinterface (due to bug in SI code that dosen't register GPU @20240605)
+    Loads data preprocessed with spikeinterface and saves kilosort4 output to output folder / kilosort4.
+    """
+    n_channels = preprocessed_AP.channel_ids.shape[0]
+    sample_freq = preprocessed_AP.sampling_frequency
+    # save and load probe into KS
+    probe = _load_kilosort_probe(preprocessed_AP, temp_output_folder)
+    temp_output_folder = output_folder / "preprocessed_temp"
+    raw_data_file = list(temp_output_folder.rglob("*.raw"))[0]
+    ops, st, clu, tF, Wall, similar_templates, is_ref, est_contam_rate = run_kilosort(
+        settings={"fs": sample_freq, "n_chan_bin": n_channels},
+        probe=probe,
+        filename=raw_data_file,
+        results_dir=output_folder / "kilosort4",
+        data_dtype="int16",
+        do_CAR=False,
+    )
+    return
+
+
+def run_kilosort3(preprocessed_AP, output_folder):
+    """
+    Runs kilosort3 through spikeinterface. Note that this requires Kilosort3 to be installed and compiled locally,
+    see README for more details."""
+    sorter_params = ss.get_default_sorter_params("kilosort3")
+    sorter_params["car"] = False
+    sorter_params["do_correction"] = True
+    ks3_sorting = ss.run_sorter(
+        "kilosort3",
+        recording=preprocessed_AP,
+        folder=output_folder / "kilosort3",
+        verbose=True,
+        remove_existing_folder=True,
+        **sorter_params,
+    )
+    return
+
+
+def _load_kilosort_probe(si_recording, temp_output_folder):
+    """
+    This function saves a spikeinterface probe object to a .prb file that can be loaded
+    into Kilosort4
+
+    Inputs:
+    - si_recording: spikeinterface recording object
+    - temp_output_folder: Path to save the .prb file
+
+    Returns:
+    - KS probe dict
+    """
+    pg = ProbeGroup()
+    pg.add_probe(probe=si_recording.get_probe())
+    probe_path = temp_output_folder / "probe.prb"
+    write_prb(probe_path, pg)
+    return io.load_probe(probe_path)
+
+
+# %%
+
+
 def spikesort_session(
     ephys_path,
     AP_stream_name,
@@ -60,7 +174,6 @@ def spikesort_session(
     remove_bad_channels=False,
     denoise="destripe",
     save_temp_preprocessed_data=True,
-    sorting=False,
     save_qc_figs=True,
 ):
     """
@@ -102,40 +215,53 @@ def spikesort_session(
         preprocessed_AP = sp.highpass_spatial_filter(preprocessed_AP)
     if remove_bad_channels:
         preprocessed_AP = preprocessed_AP.remove_channels(bad_channels)
+    # motion correction
+    # if motion_correction == "spikeinterface":
+    #     motion_correction_folder = output_folder / "motion_correction"
+    #     motion_correction_folder.mkdir(parents=True, exist_ok=True)
+    #     motion_correction_AP = sp.correct_motion(
+    #         preprocessed_AP, preset="nonrigid_accurate", folder=motion_correction_folder
+    #     )
     if save_qc_figs:
         preprocessing_fig, axs = plt.subplots(ncols=2, figsize=(20, 10))
         sw.plot_traces(raw_AP, backend="matplotlib", clim=(-500, 500), ax=axs[0])
         sw.plot_traces(preprocessed_AP, backend="matplotlib", clim=(-500, 500), ax=axs[1])
         for ax, label in zip(axs, ["Raw", "Preprocessed"]):
-            ax.set_tile(label)
+            ax.set_title(label)
             ax.set_xlabel("Time (s)")
+        fig_folder = output_folder / "figs"
+        fig_folder.mkdir(parents=True, exist_ok=True)
         preprocessing_fig.savefig(output_folder / "figs" / "preprocessed_traces.png")
     # Save preprocessed .dat file
     if save_temp_preprocessed_data:
+        print(f"Saving preprocessed data to {output_folder}")
         preprocessed_AP.save(
             folder=output_folder / "preprocessed_temp",
             format="binary",
             n_jobs=40,
             chunk_duration="1s",
             progress_bar=True,
+            overwrite=True,
         )
-    # Run Kilosort4
-    if sorting:
-        sorting_params = ss.get_default_sorter_params("kilosort4")
-        sorting_params["skip_kilosort_preprocessing"] = True
-        sorting_params["do_correction"] = True
-        sorting = ss.run_sorter(
-            "kilosort4",
-            recording=preprocessed_AP,
-            output_folder=output_folder / "kilosort4",
-            verbose=True,
-            **sorting_params,
-        )
+    # return preprocessed_AP
+    # Run Kilosort4 with spikeinterface
+    sorting_params = ss.get_default_sorter_params("kilosort4")
+    sorting_params["do_CAR"] = False
+    sorting_params["skip_kilosort_preprocessing"] = True
+    sorting_params["do_correction"] = True
+    print(f"Running Kilosort4 on {subject} {datetime_string}")
+    sorting = ss.run_sorter(
+        "kilosort4",
+        recording=preprocessed_AP,
+        output_folder=output_folder / "kilosort4",
+        verbose=True,
+        remove_existing_folder=True,
+        **sorting_params,
+    )
+    return sorting
 
-    return print(f"Session {subject} {datetime_string} spikesorted with Kilosort4")
 
-
-# %% Functions
+# %% Supporting Functions
 
 
 def get_ephys_paths_df():
@@ -262,3 +388,94 @@ def get_ephys_paths_df():
             path_info["spikeinterface_readable"] = False
         ephys_paths_info.append(path_info)
     return pd.DataFrame(ephys_paths_info)
+
+
+# %% Plotting functions
+
+
+def plot_kilosort_results(kilosort_dir, save_dir, save_name, version=4):
+    """
+    Adapted from https://github.com/MouseLand/Kilosort/blob/main/docs/tutorials/kilosort4.ipynb
+    """
+    # load kilosort output
+    if version == 4:
+        try:
+            ops = np.load(kilosort_dir / "ops.npy", allow_pickle=True).item()
+            camps = pd.read_csv(kilosort_dir / "cluster_Amplitude.tsv", sep="\t")["Amplitude"].values
+            contam_pct = pd.read_csv(kilosort_dir / "cluster_ContamPct.tsv", sep="\t")["ContamPct"].values
+            chan_map = np.load(kilosort_dir / "channel_map.npy")
+            templates = np.load(kilosort_dir / "templates.npy")
+            chan_best = (templates**2).sum(axis=1).argmax(axis=-1)
+            chan_best = chan_map[chan_best]
+            amplitudes = np.load(kilosort_dir / "amplitudes.npy")
+            spike_times = np.load(kilosort_dir / "spike_times.npy")
+            clu = np.load(kilosort_dir / "spike_clusters.npy")
+        except FileNotFoundError:
+            raise FileNotFoundError(f"Kilosort output not found in directory: {kilosort_dir}")
+    elif version == 3:
+        try:
+            camps = pd.read_csv(kilosort_dir / "cluster_Amplitude.tsv", sep="\t")["Amplitude"].values
+            contam_pct = pd.read_csv(kilosort_dir / "cluster_ContamPct.tsv", sep="\t")["ContamPct"].values
+            chan_map = np.load(kilosort_dir / "channel_map.npy")
+            templates = np.load(kilosort_dir / "templates.npy")
+            chan_best = (templates**2).sum(axis=1).argmax(axis=-1)
+            chan_best = chan_map[:, chan_best]
+            amplitudes = np.load(kilosort_dir / "amplitudes.npy")
+            spike_times = np.load(kilosort_dir / "spike_times.npy")
+            clu = np.load(kilosort_dir / "spike_clusters.npy")
+        except FileNotFoundError:
+            raise FileNotFoundError(f"Kilosort output not found in directory: {kilosort_dir}")
+    firing_rates = np.unique(clu, return_counts=True)[1] * 30000 / spike_times.max()
+    # plot figure
+    gray = 0.5 * np.ones(3)
+    fig = plt.figure(figsize=(10, 10), dpi=100)
+    grid = gridspec.GridSpec(3, 3, figure=fig, hspace=0.5, wspace=0.5)
+    # probe drift
+    if version == 4:
+        dshift = ops["dshift"]
+        ax = fig.add_subplot(grid[0, 0])
+        ax.plot(np.arange(0, ops["Nbatches"]) * 2, dshift)
+        ax.set_xlabel("time (sec.)")
+        ax.set_ylabel("drift (um)")
+    # probe raster
+    ax = fig.add_subplot(grid[0, 1:])
+    t0 = 0
+    t1 = np.nonzero(spike_times > ops["fs"] * 5)[0][0]
+    ax.scatter(spike_times[t0:t1] / 30000.0, chan_best[clu[t0:t1]], s=0.5, color="k", alpha=0.25)
+    ax.set_xlim([0, 5])
+    ax.set_ylim([chan_map.max(), 0])
+    ax.set_xlabel("time (sec.)")
+    ax.set_ylabel("channel")
+    ax.set_title("spikes from units")
+    # firing rate histogram
+    ax = fig.add_subplot(grid[1, 0])
+    nb = ax.hist(firing_rates, 20, color=gray)
+    ax.set_xlabel("firing rate (Hz)")
+    ax.set_ylabel("# of units")
+    # amplitude histogram
+    ax = fig.add_subplot(grid[1, 1])
+    nb = ax.hist(camps, 20, color=gray)
+    ax.set_xlabel("amplitude")
+    ax.set_ylabel("# of units")
+    # contamination histogram
+    ax = fig.add_subplot(grid[1, 2])
+    nb = ax.hist(np.minimum(100, contam_pct), np.arange(0, 105, 5), color=gray)
+    ax.plot([10, 10], [0, nb[0].max()], "k--")
+    ax.set_xlabel("% contamination")
+    ax.set_ylabel("# of units")
+    ax.set_title("< 10% = good units")
+
+    for k in range(2):
+        ax = fig.add_subplot(grid[2, k])
+        is_ref = contam_pct < 20.0
+        ax.scatter(firing_rates[~is_ref], camps[~is_ref], s=3, color="r", label="mua", alpha=0.25)
+        ax.scatter(firing_rates[is_ref], camps[is_ref], s=3, color="b", label="good", alpha=0.25)
+        ax.set_ylabel("amplitude (a.u.)")
+        ax.set_xlabel("firing rate (Hz)")
+        ax.legend()
+        if k == 1:
+            ax.set_xscale("log")
+            ax.set_yscale("log")
+            ax.set_title("loglog")
+    fig.savefig(save_dir / f"{save_name}.png")
+    return
