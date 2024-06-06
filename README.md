@@ -1,4 +1,41 @@
 # Spike Sorting for GridMaze Experiments
 
-### Notes on set up
-- 
+## Notes on Set Up
+
+### Create ```spike_sorting``` Environment
+To avoid package conflicts lets make a new conda environment specific for spike_sorting using the code from this repo (Note Kilsort4 suggests using python version 3.9)
+
+Create environment, activiate and install required packages, with the following terminal commands:
+```
+conda create --name spike_sorting python=3.9
+``` 
+```
+conda activate spike_sorting
+```
+```
+pip install spikeinterface kilosort==4.0.6
+```
+
+### Add local version of Kilosort3
+If you want to use Kilosort3 for spike sorting you will need to clone and compile the code locally. Note it is possible to avoid doing this by using spikeinterface's [containerised spike sorting system](https://spikeinterface.readthedocs.io/en/latest/modules/sorters.html#running-sorters-in-docker-singularity-containers), but I haven't got this to work on the cluster yet. 
+
+Lets clone the Kilosort to our project's code folder, swap versions to Kilosort3 (and rename the folder to avoid confusion), and do some prerequist compiling
+
+```
+cd <your_project/code>
+git clone https://github.com/MouseLand/Kilosort.git
+```
+```
+git checkout v3.0.2
+mv Kilosort Kilosort3
+
+```
+```
+module load matlab/R2021a
+module load cuda/11.8
+cd Kilosort3/CUDA
+matlab
+mexGPUall
+```
+You should now be read to use your local installation of Kilosort3 with Spike Interface
+
