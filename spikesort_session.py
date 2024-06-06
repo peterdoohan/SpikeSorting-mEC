@@ -1,6 +1,7 @@
 """Script to spikesort ephys sessions using Kilosort and Spike interface"""
 
 # %%  imports
+import shutil
 import numpy as np
 import pandas as pd
 from pathlib import Path
@@ -13,6 +14,7 @@ from spikeinterface import preprocessing as sp
 from spikeinterface import widgets as sw
 from spikeinterface import qualitymetrics as sq
 from spikeinterface import exporters as sx
+from spikeinterface import curation as sc
 from kilosort import io
 from kilosort import run_kilosort
 
@@ -46,6 +48,202 @@ def run_ephys_preprocessing():
 
 
 # %%
+
+
+def preprocess_ephys_session(
+    ephys_path,
+    AP_stream_name,
+    save_preprocessed_data=True,
+    load_preprocessed_data=False,
+    remove_processed_data=False,
+    spike_sorter="Kilosort3",
+    remove_duplicate_spikes=False,
+    print_summary=True,
+):
+    """
+    This function takes a data from raw ephys Neuropixel 1.0 recordings aquired with OpenEphys and creates a preprocessed
+    data folder that contains temporary preprocessed_data file (optionally deleted at the end of preprocessing), the outputs
+    of spikesorting (Kilosort3 or Kilosort4), and report that gives detailed quality metrics and summary figures for each
+    spike sorted unit.
+
+    The function runs the following steps:
+        EPHYS_PREPROCESSING:
+        - Phase shift corrrection (accounts for time between sampling neuropixel data across channels)
+        - Highpass filter (300Hz)
+        - Detect and remove channels outside the brain
+        - Detect and interpolate bad channels
+        - Denoise IBL highpass_spatial_filter method (destrip protocol)
+        - Save out raw and preprocessed traces for quality control (needed for fast spikesorting)
+        - Save out binary preprocessed data /preprocessed_temp
+
+        SPIKESORTING:
+        - Run Kilosort3 or Kilosort4 without common average referencing (drift correction is applied)
+        - Removes excess spikes (removes spikes attributed to outside recording period)
+        - (Optionally) remove duplicate spikes (just trying this out, not sure it is a good idea)
+
+        POSTPROCESSING:
+        - Comute quality metrics for spike sorted units
+        - Save out report with quality metrics and summary figures
+        - Optionaly print cluster ids that pass IBL single-unit quality control
+    """
+    # set up output folder
+    subject, datetime_string = ephys_path.parts[-2:]
+    output_folder = KILOSORT_PATH / subject / datetime_string
+    output_folder.mkdir(parents=True, exist_ok=True)
+    # preprocessing
+    raw_rec = se.read_openephys(ephys_path, stream_name=AP_stream_name)
+    if not load_preprocessed_data:
+        preprocessed_rec = preprocess_ephys_data(raw_rec, save=save_preprocessed_data)
+    else:
+        preprocessed_rec = load_extractor(output_folder / "preprocessed_temp")
+    # save preprocssed traces for quality control
+    fig = _plot_preprocessed_trace_qc(raw_rec, preprocessed_rec)
+    fig.savefig(output_folder / "preprocessed_traces.png")
+    # spikesorting
+    if spike_sorter == "Kilosort4":
+        assert save_preprocessed_data or load_preprocessed_data, "Kilosort4 requires preprocessed data to be saved"
+        sorter = run_kilosort4(preprocessed_rec, output_folder)
+    elif spike_sorter == "Kilosort3":
+        sorter = run_kilosort3(preprocessed_rec, output_folder)
+    else:
+        raise ValueError(f"{spike_sorter} not supported")
+    sorter = sc.remove_excess_spikes(sorter, preprocessed_rec)
+    sorter = sc.remove_duplicated_spikes(sorter) if remove_duplicate_spikes else sorter
+    # postprocessing & quality metics
+    postprocess_ephys_data(preprocessed_rec, sorter, kilosort_folder=output_folder / spike_sorter)
+    report_path = output_folder / spike_sorter / "sorter_output" / "report"
+    qc_metric_df = pd.read_csv(report_path / "quality_metrics.csv")
+    qc_pass_single_units = _get_single_units_qc_passed_units(qc_metric_df)
+    if remove_processed_data:
+        temp_output_folder = output_folder / "preprocessed_temp"
+        shutil.rmtree(temp_output_folder)
+    if print_summary:
+        print(f"Total clusters fround: {len(qc_metric_df)}")
+        print(f"Clusters passing sing unit QC: Total: {len(qc_pass_single_units)}, {qc_pass_single_units}")
+    return print(f"Finished processing ephys session: {subject} {datetime_string}")
+
+
+def preprocess_ephys_data(raw_rec, save=True):
+    """Preprocesses ephys data with spikeinterface, see preprocess_ephys_session for details"""
+    all_channel_ids = raw_rec.get_channel_ids()
+    phase_shift_rec = sp.phase_shift(raw_rec)
+    highpass_rec = sp.highpass_filter(phase_shift_rec, freq_min=300)
+    _, channel_labels = sp.detect_bad_channels(phase_shift_rec)
+    preprocessed_rec = highpass_rec.remove_channels(all_channel_ids[channel_labels == "out"])
+    bad_channels = np.concatenate(
+        [all_channel_ids[channel_labels == "noise"], all_channel_ids[channel_labels == "dead"]]
+    )
+    preprocessed_rec = sp.interpolate_bad_channels(preprocessed_rec, bad_channel_ids=bad_channels)
+    preprocessed_AP = sp.highpass_spatial_filter(preprocessed_rec)
+    # save preprocessed AP signal with spikeinterface
+    if save:
+        temp_output_folder = output_folder / "preprocessed_temp"
+        print(f"Saving preprocessed ephys data to {temp_output_folder}")
+        preprocessed_AP.save(
+            folder=temp_output_folder,
+            format="binary",
+            n_jobs=40,
+            chunk_duration="1s",
+            progress_bar=True,
+            overwrite=True,
+        )
+    return preprocessed_AP
+
+
+def _plot_preprocessed_trace_qc(raw_rec, preprocessed_rec):
+    """Saves figure with raw and preprocessed traces for quality control"""
+    fig, axs = plt.subplots(ncols=2, figsize=(20, 10))
+    sw.plot_traces(raw_rec, backend="matplotlib", clim=(-500, 500), ax=axs[0])
+    sw.plot_traces(preprocessed_rec, backend="matplotlib", clim=(-500, 500), ax=axs[1])
+    for ax, label in zip(axs, ["Raw", "Preprocessed"]):
+        ax.set_title(label)
+        ax.set_xlabel("Time (s)")
+    return fig
+
+
+def run_Kilosort4(
+    preprocessed_rec,
+    output_folder,
+):
+    """Run kilosort4 without spikeinterface (current bug in SI code, adapt when fixed)"""
+    n_channels = preprocessed_rec.channel_ids.shape[0]
+    sample_freq = preprocessed_rec.sampling_frequency
+    # save and load probe into KS
+    probe = _load_kilosort_probe(preprocessed_AP, temp_output_folder)
+    temp_output_folder = output_folder / "preprocessed_temp"
+    raw_data_file = list(temp_output_folder.rglob("*.raw"))[0]
+    sort_output_dir = output_folder / "kilosort4" / "sorter_output"
+    ops, st, clu, tF, Wall, similar_templates, is_ref, est_contam_rate = run_kilosort(
+        settings={"fs": sample_freq, "n_chan_bin": n_channels},
+        probe=probe,
+        filename=raw_data_file,
+        results_dir=output_folder / "Kilosort4" / "sorter_output",
+        data_dtype="int16",
+        do_CAR=False,
+    )
+    sorter = se.read_kilosort(sort_output_dir / "kilosort4")
+    return sorter
+
+
+def run_Kilosort3(preprocessed_AP, output_folder):
+    """
+    Runs kilosort3 through spikeinterface. Note that this requires Kilosort3 to be installed and compiled locally,
+    see README for more details."""
+    sorter_params = ss.get_default_sorter_params("kilosort3")
+    sorter_params["car"] = False
+    sorter_params["do_correction"] = True
+    sorter = ss.run_sorter(
+        "kilosort3",
+        recording=preprocessed_AP,
+        folder=output_folder / "Kilosort3",
+        verbose=True,
+        remove_existing_folder=True,
+        **sorter_params,
+    )
+    return sorter
+
+
+def postprocess_ephys_data(preprocessed_rec, sorter, kilosort_path):
+    """Computes quality metrics and saves report for spike sorted data"""
+    analyzer = create_sorting_analyzer(sorter, preprocessed_rec, sparse=True, format="memory", n_jobs=40)
+    job_kwargs = dict(n_jobs=40, chunk_duration="1s", progress_bar=True)
+    analyzer.compute("random_spikes", method="uniform", max_spikes_per_unit=500)
+    analyzer.compute("waveforms", ms_before=1.5, ms_after=2.0, **job_kwargs)
+    analyzer.compute("templates", operators=["average", "median", "std"])
+    analyzer.compute("noise_levels")
+    analyzer.compute("correlograms")
+    analyzer.compute("unit_locations")
+    analyzer.compute("spike_amplitudes", **job_kwargs)
+    analyzer.compute("principal_components", **job_kwargs)
+    analyzer.compute("spike_locations", **job_kwargs)
+    # save report
+    report_path = kilosort_path / "report"
+    sx.export_report(analyzer, report_path, **job_kwargs)
+    return analyzer
+
+
+def _get_single_units_qc_passed_units(
+    qc_metrics_df, sliding_rp_violation_range=(0.1, 0.9), amplitude_cutoff_thres=0.05, median_aplitude_thres=50
+):
+    """
+    Filters quality metrics output dataframe for units that pass single unit quality control (similar to how IBL does it).
+    See https://spikeinterface.readthedocs.io/en/latest/modules/qualitymetrics.html for metric descriptions.
+    Args:
+        report_path (Path): Path to the Kilosort report folder
+        sliding_rp_violation_range (tuple): Tuple of floats, range of rp violation values that are acceptable
+        amplitude_cutoff_thres (float): Float, amplitude cutoff threshold
+        median_aplitude_thres (float): Float, median amplitude threshold
+    """
+    qc_metrics_df.reset_index(inplace=True)
+    qc_metrics_df.rename(columns={"index": "unit_id"}, inplace=True)
+    qc_metrics_df["amplitude_median"] = qc_metrics_df["amplitude_median"].abs()
+    single_units_qc_passed = qc_metrics_df.query(
+        f"sliding_rp_violation > {sliding_rp_violation_range[0]} and sliding_rp_violation < {sliding_rp_violation_range[1]} and amplitude_cutoff < {amplitude_cutoff_thres} and amplitude_median > {median_aplitude_thres}"
+    )
+    return single_units_qc_passed["unit_id"].to_list()
+
+
+# %%
 def post_processing(preprocessed_path, kilosort_path):
     """ """
     preprocessed_recording = load_extractor(preprocessed_path)
@@ -63,9 +261,8 @@ def post_processing(preprocessed_path, kilosort_path):
     analyzer.compute("spike_locations", **job_kwargs)
     metric_names = sq.get_quality_metric_list() + sq.get_quality_pca_metric_list()
     metrics = sq.compute_quality_metrics(analyzer, metric_names=metric_names)
-    sx.export_report(analyzer, preprocessing_path.parent / "report", **job_kwargs)
+    sx.export_report(analyzer, kilosort_path / "report", **job_kwargs)
     sx.export_to_phy()
-
     return
 
 
@@ -113,7 +310,7 @@ def run_kilosort4(preprocessed_AP, output_folder):
     n_channels = preprocessed_AP.channel_ids.shape[0]
     sample_freq = preprocessed_AP.sampling_frequency
     # save and load probe into KS
-    probe = _load_kilosort_probe(preprocessed_AP, temp_output_folder)
+    probe = _load_kilosort_probe4(preprocessed_AP, temp_output_folder)
     temp_output_folder = output_folder / "preprocessed_temp"
     raw_data_file = list(temp_output_folder.rglob("*.raw"))[0]
     ops, st, clu, tF, Wall, similar_templates, is_ref, est_contam_rate = run_kilosort(
@@ -125,6 +322,25 @@ def run_kilosort4(preprocessed_AP, output_folder):
         do_CAR=False,
     )
     return
+
+
+def _load_kilosort4_probe(si_recording, temp_output_folder):
+    """
+    This function saves a spikeinterface probe object to a .prb file that can be loaded
+    into Kilosort4
+
+    Inputs:
+    - si_recording: spikeinterface recording object
+    - temp_output_folder: Path to save the .prb file
+
+    Returns:
+    - KS probe dict
+    """
+    pg = ProbeGroup()
+    pg.add_probe(probe=si_recording.get_probe())
+    probe_path = temp_output_folder / "probe.prb"
+    write_prb(probe_path, pg)
+    return io.load_probe(probe_path)
 
 
 def run_kilosort3(preprocessed_AP, output_folder):
@@ -388,94 +604,3 @@ def get_ephys_paths_df():
             path_info["spikeinterface_readable"] = False
         ephys_paths_info.append(path_info)
     return pd.DataFrame(ephys_paths_info)
-
-
-# %% Plotting functions
-
-
-def plot_kilosort_results(kilosort_dir, save_dir, save_name, version=4):
-    """
-    Adapted from https://github.com/MouseLand/Kilosort/blob/main/docs/tutorials/kilosort4.ipynb
-    """
-    # load kilosort output
-    if version == 4:
-        try:
-            ops = np.load(kilosort_dir / "ops.npy", allow_pickle=True).item()
-            camps = pd.read_csv(kilosort_dir / "cluster_Amplitude.tsv", sep="\t")["Amplitude"].values
-            contam_pct = pd.read_csv(kilosort_dir / "cluster_ContamPct.tsv", sep="\t")["ContamPct"].values
-            chan_map = np.load(kilosort_dir / "channel_map.npy")
-            templates = np.load(kilosort_dir / "templates.npy")
-            chan_best = (templates**2).sum(axis=1).argmax(axis=-1)
-            chan_best = chan_map[chan_best]
-            amplitudes = np.load(kilosort_dir / "amplitudes.npy")
-            spike_times = np.load(kilosort_dir / "spike_times.npy")
-            clu = np.load(kilosort_dir / "spike_clusters.npy")
-        except FileNotFoundError:
-            raise FileNotFoundError(f"Kilosort output not found in directory: {kilosort_dir}")
-    elif version == 3:
-        try:
-            camps = pd.read_csv(kilosort_dir / "cluster_Amplitude.tsv", sep="\t")["Amplitude"].values
-            contam_pct = pd.read_csv(kilosort_dir / "cluster_ContamPct.tsv", sep="\t")["ContamPct"].values
-            chan_map = np.load(kilosort_dir / "channel_map.npy")
-            templates = np.load(kilosort_dir / "templates.npy")
-            chan_best = (templates**2).sum(axis=1).argmax(axis=-1)
-            chan_best = chan_map[:, chan_best]
-            amplitudes = np.load(kilosort_dir / "amplitudes.npy")
-            spike_times = np.load(kilosort_dir / "spike_times.npy")
-            clu = np.load(kilosort_dir / "spike_clusters.npy")
-        except FileNotFoundError:
-            raise FileNotFoundError(f"Kilosort output not found in directory: {kilosort_dir}")
-    firing_rates = np.unique(clu, return_counts=True)[1] * 30000 / spike_times.max()
-    # plot figure
-    gray = 0.5 * np.ones(3)
-    fig = plt.figure(figsize=(10, 10), dpi=100)
-    grid = gridspec.GridSpec(3, 3, figure=fig, hspace=0.5, wspace=0.5)
-    # probe drift
-    if version == 4:
-        dshift = ops["dshift"]
-        ax = fig.add_subplot(grid[0, 0])
-        ax.plot(np.arange(0, ops["Nbatches"]) * 2, dshift)
-        ax.set_xlabel("time (sec.)")
-        ax.set_ylabel("drift (um)")
-    # probe raster
-    ax = fig.add_subplot(grid[0, 1:])
-    t0 = 0
-    t1 = np.nonzero(spike_times > ops["fs"] * 5)[0][0]
-    ax.scatter(spike_times[t0:t1] / 30000.0, chan_best[clu[t0:t1]], s=0.5, color="k", alpha=0.25)
-    ax.set_xlim([0, 5])
-    ax.set_ylim([chan_map.max(), 0])
-    ax.set_xlabel("time (sec.)")
-    ax.set_ylabel("channel")
-    ax.set_title("spikes from units")
-    # firing rate histogram
-    ax = fig.add_subplot(grid[1, 0])
-    nb = ax.hist(firing_rates, 20, color=gray)
-    ax.set_xlabel("firing rate (Hz)")
-    ax.set_ylabel("# of units")
-    # amplitude histogram
-    ax = fig.add_subplot(grid[1, 1])
-    nb = ax.hist(camps, 20, color=gray)
-    ax.set_xlabel("amplitude")
-    ax.set_ylabel("# of units")
-    # contamination histogram
-    ax = fig.add_subplot(grid[1, 2])
-    nb = ax.hist(np.minimum(100, contam_pct), np.arange(0, 105, 5), color=gray)
-    ax.plot([10, 10], [0, nb[0].max()], "k--")
-    ax.set_xlabel("% contamination")
-    ax.set_ylabel("# of units")
-    ax.set_title("< 10% = good units")
-
-    for k in range(2):
-        ax = fig.add_subplot(grid[2, k])
-        is_ref = contam_pct < 20.0
-        ax.scatter(firing_rates[~is_ref], camps[~is_ref], s=3, color="r", label="mua", alpha=0.25)
-        ax.scatter(firing_rates[is_ref], camps[is_ref], s=3, color="b", label="good", alpha=0.25)
-        ax.set_ylabel("amplitude (a.u.)")
-        ax.set_xlabel("firing rate (Hz)")
-        ax.legend()
-        if k == 1:
-            ax.set_xscale("log")
-            ax.set_yscale("log")
-            ax.set_title("loglog")
-    fig.savefig(save_dir / f"{save_name}.png")
-    return
