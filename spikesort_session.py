@@ -175,7 +175,7 @@ def run_Kilosort4(preprocessed_rec, temp_preprocessed_dir, Kilosort_dir):
         filename=raw_data_file,
         results_dir=sorter_output_dir,
         data_dtype="int16",
-        do_CAR=True,
+        do_CAR=False,
     )
     sorter = se.read_kilosort(sorter_output_dir)
     return sorter
