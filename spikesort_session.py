@@ -175,7 +175,7 @@ def run_Kilosort4(preprocessed_rec, temp_preprocessed_dir, Kilosort_dir):
         filename=raw_data_file,
         results_dir=sorter_output_dir,
         data_dtype="int16",
-        do_CAR=False,
+        do_CAR=True,
     )
     sorter = se.read_kilosort(sorter_output_dir)
     return sorter
@@ -205,8 +205,6 @@ def run_Kilosort3(preprocessed_AP, Kilosort_dir):
     Runs kilosort3 through spikeinterface. Note that this requires Kilosort3 to be installed and compiled locally,
     see README for more details."""
     sorter_params = ss.get_default_sorter_params("kilosort3")
-    sorter_params["car"] = False
-    sorter_params["do_correction"] = True
     sorter = ss.run_sorter(
         "kilosort3",
         recording=preprocessed_AP,
@@ -220,8 +218,11 @@ def run_Kilosort3(preprocessed_AP, Kilosort_dir):
 
 def postprocess_ephys_data(preprocessed_rec, sorter, report_path):
     """Computes quality metrics and saves report for spike sorted data"""
-    analyzer = create_sorting_analyzer(sorter, preprocessed_rec, sparse=True, format="memory", n_jobs=80)
+    analyzer_folder = report_path.parent / "analyzer"
     job_kwargs = dict(n_jobs=80, chunk_duration="2s", progress_bar=True)
+    analyzer = create_sorting_analyzer(
+        sorter, preprocessed_rec, sparse=True, format="binary_folder", folder=analyzer_folder, **job_kwargs
+    )
     analyzer.compute("random_spikes", method="uniform", max_spikes_per_unit=500)
     analyzer.compute("waveforms", ms_before=1.5, ms_after=2.0, **job_kwargs)
     analyzer.compute("templates", operators=["average", "median", "std"])
@@ -231,13 +232,16 @@ def postprocess_ephys_data(preprocessed_rec, sorter, report_path):
     analyzer.compute("spike_amplitudes", **job_kwargs)
     analyzer.compute("principal_components", **job_kwargs)
     analyzer.compute("spike_locations", **job_kwargs)
-    # save report
+    analyzer.compute("template_similarity")
+    # compute quality metrics, saved in analyzer and added to report generated below
+    metric_names = sq.get_quality_metric_list() + sq.get_quality_pca_metric_list()
+    metrics_df = sq.compute_quality_metrics(analyzer, metric_names=metric_names, **job_kwargs)
     sx.export_report(analyzer, report_path, **job_kwargs)
     return
 
 
 def _get_qc_pass_single_units(
-    qc_metrics_df, sliding_rp_violation_range=(0.1, 0.9), amplitude_cutoff_thres=0.05, median_aplitude_thres=50
+    qc_metrics_df, sliding_rp_violation_thres=0.9, amplitude_cutoff_thres=0.05, median_aplitude_thres=50
 ):
     """
     Filters quality metrics output dataframe for units that pass single unit quality control (similar to how IBL does it).
@@ -252,7 +256,7 @@ def _get_qc_pass_single_units(
     qc_metrics_df.rename(columns={"index": "unit_id"}, inplace=True)
     qc_metrics_df["amplitude_median"] = qc_metrics_df["amplitude_median"].abs()
     single_units_qc_passed = qc_metrics_df.query(
-        f"sliding_rp_violation > {sliding_rp_violation_range[0]} and sliding_rp_violation < {sliding_rp_violation_range[1]} and amplitude_cutoff < {amplitude_cutoff_thres} and amplitude_median > {median_aplitude_thres}"
+        f"sliding_rp_violation < {sliding_rp_violation_thres} and amplitude_cutoff < {amplitude_cutoff_thres} and amplitude_median > {median_aplitude_thres}"
     )
     return single_units_qc_passed["unit_id"].to_list()
 
