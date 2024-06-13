@@ -97,8 +97,9 @@ def preprocess_ephys_session(
     AP_stream_name,
     delete_processed_data=False,
     spike_sorter="Kilosort3",
+    sorter_output_name=None,
     sorter_params={
-        "detect_threshold": 6,
+        "detect_threshold": 7,
         "projection_threshold": [10, 12],
         "car": False,
         "do_correction": True,
@@ -125,7 +126,7 @@ def preprocess_ephys_session(
     output_folder = KILOSORT_PATH / subject / datetime_string
     output_folder.mkdir(parents=True, exist_ok=True)
     temp_preprocessed_dir = output_folder / "preprocessed_temp"
-    Kilosort_dir = output_folder / spike_sorter
+    Kilosort_dir = output_folder / spike_sorter if sorter_output_name is None else output_folder / sorter_output_name
     analyzer_folder = Kilosort_dir / "analyzer"
     qc_report_path = Kilosort_dir / "report"
     raw_rec = se.read_openephys(ephys_path, stream_name=AP_stream_name)
