@@ -1,11 +1,40 @@
 """Library of functions to plot and compare quality metrics output from spikesorting/ephys preprocessing"""
 
 # %% Imports
+import os
 import pandas as pd
 import seaborn as sns
-from .preprocess_ephys import get_single_units
+from datetime import date
+from datetime import datetime as dt
+from . import preprocess_ephys as pe
 
-# Functions
+# %% Functions
+
+
+def preprocess_test_sessions(
+    test_date=date(2024, 2, 22),
+    sorters=["Kilosort3"],
+    sorter2sorter_params={
+        "Kilosort3": {
+            "detect_threshold": 6,
+            "projection_threshold": [10, 12],
+            "car": False,
+            "do_correction": True,
+        }
+    },
+):
+    """
+    Runs ephys preprocessing for different spike sorters on test sessions from one day of recording across all subjects.
+    Jobs are submitted to cluster and once run, the output can be compared using plot_qc_metrics.
+    """
+    ephys_paths_df = pe.get_ephys_paths_df()
+    test_sessions_df = ephys_paths_df[ephys_paths_df.datetime.apply(lambda x: x.date()) == test_date]
+    for ephys_info in test_sessions_df[1:].itertuples():
+        for sorter in sorters:
+            print(f"Submitting {ephys_info.subject} {ephys_info.datetime} to HPC")
+            script_path = pe.get_ephys_preprocessing_SLURM_script(ephys_info, sorter, sorter2sorter_params[sorter])
+            os.system(f"sbatch {script_path}")
+    return print("All ephys preprocessing jobs submitted to HPC. Check progress with 'squeue -u <username>'")
 
 
 def plot_qc_metrics(qc_metrics_paths, labels):
@@ -42,7 +71,7 @@ def plot_qc_metrics(qc_metrics_paths, labels):
     # plot sinlge unit bar plots
     n_clusters_df = pd.DataFrame(columns=["total_clusters", "single_units"], index=labels)
     for df, label in zip(qc_metrics_dfs, labels):
-        single_units = get_single_units(df)
+        single_units = pe.get_single_units(df)
         n_clusters_df.loc[label, "total_clusters"] = len(df)
         n_clusters_df.loc[label, "single_units"] = len(single_units)
     n_clusters_df.reset_index(inplace=True)
