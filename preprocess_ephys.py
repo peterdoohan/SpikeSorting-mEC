@@ -28,6 +28,9 @@ KILOSORT_PATH = Path("../data/preprocessed_data/Kilosort")
 
 ss.Kilosort3Sorter.set_kilosort3_path("./Kilosort3")
 
+from spikeinterface.core import set_global_job_kwargs
+
+set_global_job_kwargs(n_jobs=80, chunk_duration="1s", progress_bar=True)
 # ephys_path = Path('../data/raw_data/ephys/mEC_8/2024-02-22_18-08-35')
 # AP_stream_name = 'Record Node 101#Neuropix-PXI-100.mEC8-AP'
 #
@@ -65,13 +68,14 @@ def run_ephys_preprocessing(
 
 
 def get_ephys_preprocessing_SLURM_script(ephys_info, spike_sorter, sorter_params, RAM="64GB", time_limit="12:00:00"):
-    session_ID = f"{ephys_info.subject}_{ephys_info.datetime.isoformat()}"
+    session_ID = f"{ephys_info.subject}_{ephys_info.datetime.isoformat()}_{spike_sorter}"
     script = f"""#!/bin/bash
 #SBATCH --job-name=ephys_preprocessing_{session_ID}
-#SBATCH --output=mazeSLEAP/jobs/out/ephys_preprocessing_{session_ID}.out
-#SBATCH --error=mazeSLEAP/jobs/err/ephys_preprocessing_{session_ID}.err
+#SBATCH --output=SpikeSorting/jobs/out/ephys_preprocessing_{session_ID}.out
+#SBATCH --error=SpikeSorting/jobs/err/ephys_preprocessing_{session_ID}.err
 #SBATCH --ntasks-per-node=1
 #SBATCH --cpus-per-task=8
+#SBATCH -p gpu
 #SBATCH --gres=gpu:1
 #SBATCH --mem={RAM}
 #SBATCH --time={time_limit}
@@ -79,13 +83,18 @@ def get_ephys_preprocessing_SLURM_script(ephys_info, spike_sorter, sorter_params
 module load matlab/R2021a
 module load cuda/11.8
 module load miniconda
+conda deactivate
 conda activate spike_sorting
 
-python -c "from SpikeSorting.preprocess_ephys import preprocess_ephys_session('{ephys_info.ephys_path}', '{ephys_info.AP_stream_name}', spike_sorter='{spike_sorter}', sorter_params={sorter_params})"
+python -c \"
+from SpikeSorting.preprocess_ephys import preprocess_ephys_session
+preprocess_ephys_session('{ephys_info.ephys_path}', '{ephys_info.AP_stream_name}', spike_sorter='{spike_sorter}', sorter_params={sorter_params})
+\"
 """
     script_path = f"SpikeSorting/jobs/slurm/ephys_preprocessing_{session_ID}.sh"
     with open(script_path, "w") as f:
         f.write(script)
+
     return script_path
 
 
@@ -122,6 +131,7 @@ def preprocess_ephys_session(
 
     """
     # set up output folders
+    ephys_path = Path(ephys_path)
     subject, datetime_string = ephys_path.parts[-2:]
     output_folder = KILOSORT_PATH / subject / datetime_string
     output_folder.mkdir(parents=True, exist_ok=True)
@@ -243,12 +253,19 @@ def get_quality_metrics(sorter, preprocessed_rec, analyzer_folder):
     )
     analyzer.compute("random_spikes", method="uniform", max_spikes_per_unit=500)
     analyzer.compute("waveforms", ms_before=1.5, ms_after=2.0, n_jobs=40)
+    print("calculating templates")
     analyzer.compute("templates", operators=["average", "median", "std"])
+    print("calculating noise levels")
     analyzer.compute("noise_levels")
+    print("calculating correlograms")
     analyzer.compute("correlograms")
+    print("calculating unit locations")
     analyzer.compute("unit_locations")
+    print("calculating spike amplitudes")
     analyzer.compute("spike_amplitudes", n_jobs=40)
+    print("calculating spike locations")
     analyzer.compute("spike_locations", n_jobs=40)
+    print("calculating template similarity")
     analyzer.compute("template_similarity")
     metric_names = sq.get_quality_metric_list()
     metrics_df = sq.compute_quality_metrics(analyzer, metric_names=metric_names, n_jobs=80)
@@ -263,6 +280,31 @@ def get_quality_metrics(sorter, preprocessed_rec, analyzer_folder):
 
 
 def get_ephys_paths_df():
+    """
+    Loads ephys_paths_df from disk and updates which sessions have areadly been processed.If ephys_paths_df
+    has not already been created, it is created and saved to disk, see _get_ephys_paths_df for details.
+    """
+    if not EPHYS_PATH / "ephys_paths_df.csv":
+        ephys_paths_df = _get_ephys_paths_df()
+        ephys_paths_df.to_csv(EPHYS_PATH / "ephys_paths_df.tsv", index=False, sep="\t")
+    else:
+        ephys_paths_df = pd.read_csv(EPHYS_PATH / "ephys_paths_df.tsv", sep="\t")
+    # check sessions have already been preprocessed
+    preprocessed = []
+    for ephys_info in ephys_paths_df.itertuples():
+        subject, datetime_string = ephys_info.subject, ephys_info.datetime
+        if (KILOSORT_PATH / subject / datetime_string).is_dir():
+            preprocessed.append(True)
+        else:
+            preprocessed.append(False)
+    ephys_paths_df["preprocessed"] = preprocessed
+    # convert paths and datetimes back to objects
+    ephys_paths_df["ephys_path"] = ephys_paths_df["ephys_path"].apply(Path)
+    ephys_paths_df["datetime"] = ephys_paths_df["datetime"].apply(dt.fromisoformat)
+    return ephys_paths_df
+
+
+def _get_ephys_paths_df():
     """
     Returns a pandas DataFrame with data extracted from raw ephys data folders.
 
@@ -291,13 +333,13 @@ def get_ephys_paths_df():
         print(ephys_path)
         subject, datetime_string = ephys_path.parts[-2:]
         datetime = dt.strptime(datetime_string, "%Y-%m-%d_%H-%M-%S")
-        spike_sorting_completed = (KILOSORT_PATH / subject / datetime_string).is_dir()
+        preprocessed = (KILOSORT_PATH / subject / datetime_string).is_dir()
         # define info dict here:
         path_info = {
             "subject": subject,
             "datetime": datetime,
             "ephys_path": ephys_path,
-            "spike_sorting_completed": spike_sorting_completed,
+            "preprocessed": preprocessed,
             "AP_stream_name": None,
             "LFP_stream_name": None,
             "multiblock_recording": None,
