@@ -1,0 +1,4 @@
+
+For the mEC dataset we want to identify cells across sessions within a day, but also across days.
+
+We therefore want to test concatenation within a day versus unit-matching two separately sorted sessions.

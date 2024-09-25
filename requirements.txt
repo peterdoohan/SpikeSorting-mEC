@@ -1,3 +1,4 @@
 kilosort==4.06
 spikeinterface[full,widgets]
 seaborn
+jupyter
