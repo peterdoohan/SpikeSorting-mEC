@@ -37,41 +37,50 @@ si.set_global_job_kwargs(n_jobs=80, chunk_duration="1s", progress_bar=True)
 
 
 def preprocess_ephys_session(
-    subject_ID, datetime, ephys_path, save_QC_plots=True, cache_preprocessed_data=True, remove_cached_data=True
+    subject_ID, datetime, ephys_path, kilosort_Ths=[9,8], 
+    save_QC_plots=True, cache_preprocessed_data=True, remove_cached_data=True,
+    spikesort_path = SPIKESORTING_PATH
 ):
-    """ """
+    """NB: kilosort_Ths = [Th_universal, Th_learned] for optimising over different parameters."""
     # Set up filepaths
-    preprocessed_path = SPIKESORTING_PATH / subject_ID / datetime
+    preprocessed_path = Path(spikesort_path) / subject_ID / datetime
     temp_path = preprocessed_path / "temp_preprocessed"
-    if not preprocessed_path.exists():
-        preprocessed_path.mkdir(parents=True)
-        raw_rec = se.read_openephys(ephys_path, stream_id="0")  # stream_id="0" is the AP data
-        preprocessed_rec = denoise_ephys_data(raw_rec, preprocessed_path, plot=save_QC_plots)
-        if cache_preprocessed_data:
-            print("Caching preprocessed data")
-            if not temp_path.exists():
-                temp_path.mkdir()
-            preprocessed_rec.save(
-                folder=preprocessed_path / "temp_preprocessed",
-                format="binary",
-                overwrite=True,
-            )
-    else:
-        print("loading cached preprocessed data")
-        preprocessed_rec = si.load_extractor(preprocessed_path / "temp_preprocessed")
-    # spikesorting
-    sorter = run_kilosort4(preprocessed_rec, preprocessed_path)
-    # Compute quality metrics
-    quality_metrics_df = get_quality_metrics(sorter, preprocessed_rec, preprocessed_path, save_cluster_reports=True)
-    quality_metrics_df.to_csv(preprocessed_path / "quality_metrics.htsv", sep="\t", index=False)
-    single_units = get_single_units(quality_metrics_df)
-    print(f"Found {len(single_units)} single units, passing quality control")
-    # Remove temp files
-    if remove_cached_data:
-        for temp_folder in ["temp_preprocessed", "sorting_analyser"]:
-            temp_path = preprocessed_path / temp_folder
-            if temp_path.exists():
-                shutil.rmtree(temp_path)
+
+    print(f'Checking {preprocessed_path} for DONE.txt')
+
+    if not (preprocessed_path/"DONE.txt").exists():
+        if not temp_path.exists(): #If a temporary cached file already exists, we can go straight to loading (see else:)
+            print('Not DONE... preprocessing data')
+            preprocessed_path.mkdir(parents=True, exist_ok=True)
+            raw_rec = se.read_openephys(ephys_path, stream_id="0")  # stream_id="0" is the AP data
+            preprocessed_rec = denoise_ephys_data(raw_rec, preprocessed_path, plot=save_QC_plots)
+            if cache_preprocessed_data:
+                print("Caching preprocessed data")
+                if not temp_path.exists():
+                    temp_path.mkdir()
+                preprocessed_rec.save(
+                    folder=preprocessed_path / "temp_preprocessed",
+                    format="binary",
+                    overwrite=True,
+                )
+        else:
+            print("loading cached preprocessed data")
+            preprocessed_rec = si.load_extractor(preprocessed_path / "temp_preprocessed")
+        # spikesorting
+        print("running spikesorting")
+        sorter = run_kilosort4(preprocessed_rec, preprocessed_path, kilosort_Ths)
+        # Compute quality metrics
+        quality_metrics_df = get_quality_metrics(sorter, preprocessed_rec, preprocessed_path, save_cluster_reports=True)
+        quality_metrics_df.to_csv(preprocessed_path / "quality_metrics.htsv", sep="\t", index=False)
+        single_units = get_single_units(quality_metrics_df)
+        print(f"Found {len(single_units)} single units, passing quality control")
+        # Remove temp files
+        if remove_cached_data:
+            for temp_folder in ["temp_preprocessed", "sorting_analyser"]:
+                temp_path = preprocessed_path / temp_folder
+                if temp_path.exists():
+                    shutil.rmtree(temp_path)
+        open(preprocessed_path/"DONE.txt",'w').close() #stores an empty .txt file to check for completion.
     return print(f"completed ephys preprocessing for {subject_ID} {datetime}")
 
 
@@ -82,21 +91,14 @@ def denoise_ephys_data(raw_rec, preprocessed_path, plot=True):
     # high pass filter
     highpass_rec = sp.highpass_filter(phase_shift_rec)
     # remove channels outside brain and interpolate bad channels
-    channel_assignments_path = preprocessed_path.parent / "channel_assignments.json"
-    if not channel_assignments_path.exists():
-        raise print(
-            f"Subject {preprocessed_path.parts[-2]} has no channel assignments. \n Run get_channel_assignments; see README or preprocessing_ephys notbook"
-        )
-    else:
-        with open(channel_assignments_path) as infile:
-            channel_assignments = json.load(infile)
+    channel_assignments = get_channel_assignments(highpass_rec, preprocessed_path)
     outside_brain_channels = [k for k, v in channel_assignments.items() if v == "out"]
     if len(outside_brain_channels) > 0:
         preprocessed_rec = highpass_rec.remove_channels(outside_brain_channels)
     else:
         outside_brain_channels = None
         preprocessed_rec = highpass_rec
-    bad_channels = [k for k, v in channel_assignments.items() if v in ["noise", "dead"]]
+    bad_channels = [k for k, v in channel_assignments.items() if v in ["noise", "dead",]]
     if len(bad_channels) > 0:
         preprocessed_rec = sp.interpolate_bad_channels(preprocessed_rec, bad_channel_ids=bad_channels)
     # destripe (denoising)
@@ -110,24 +112,52 @@ def denoise_ephys_data(raw_rec, preprocessed_path, plot=True):
 
 
 def get_channel_assignments(
-    highpass_rec, outside_thres=0.3, #NB spikeinterface default is -0.5. 
-    plot_outside_brain_channels=True, subject_ID=None, save=False
+    highpass_rec, preprocessed_path, #always required
+    outside_thres=0.3, n_neighbours=37, save_params=False, #for saving parameters
+    plot_outside_brain_channels=True, #option to avoid plotting
 ):
     """
     Finds channels outside the brain ('out'), noisey channels ('noise'), and good channels ('good') from raw ephys
-    recording and saves this information to disk as a .json file. This should be run once per subject and used for all
-    of that subject's sessions during further preprocessing.
+    recording and saves this information to disk as a .json file. 
+    This should be run for each session, after checking parameter selection for a each subject.
+    See notebooks/preprocessing_ephys.ipynb for more detail.
     """
+    # Set up paths as global directory (particularly for optim_kilosort functionality)
+    preprocessed_path=Path(preprocessed_path) #make sure this is a path object not 'str'
+    subject_id = preprocessed_path.parts[-2]
+    params_dir = SPIKESORTING_PATH/subject_id/'channel_assign_params.json' #this is a global directory
+    
+    #1) if we're saving params, generate new stuff with input parameters.
+    #2) if we're not saving params, generate new stuff with loaded parameters
+  
+    if save_params:
+        params = {'outside_threshold':outside_thres,
+                  'n_neighbours':n_neighbours}
+        with open(params_dir, "w") as outfile:
+            outfile.write(json.dumps(params, indent=4))
+    else:
+        try:
+            with open(params_dir, 'r') as j:
+                params = json.loads(j.read())
+        except:
+            raise print(f'Failed loading from {params_dir} \n Must verify parameters for bad channel assignment. Please see preprocessing_ephys.ipynb')
+    print('Assigning bad channels...')
+    #Now we've got our parameters, we will generate new channel_assignments and save them.
     all_channel_ids = highpass_rec.get_channel_ids()
     _, channel_labels = sp.detect_bad_channels(
         highpass_rec,
         outside_channels_location="top",
-        outside_channel_threshold=outside_thres,
+        outside_channel_threshold=params['outside_threshold'],
+        noisy_channel_threshold = 1, #default value but specified  
+        dead_channel_threshold = -0.5, #default value but specified
+        n_neighbors = params['n_neighbours'], # above we choose 37 as twice the size (due to nyquist) of a missing chunk in mEC_5.
         seed=0,
     )
+
     outside_brain_channels = all_channel_ids[channel_labels == "out"] if (channel_labels == "out").sum() > 0 else None
     noisey_channels = all_channel_ids[channel_labels == "noise"] if (channel_labels == "noise").sum() > 0 else None
     dead_channels = all_channel_ids[channel_labels == "dead"] if (channel_labels == "dead").sum() > 0 else None
+    
     for label, channels in zip(
         ["outside_brain", "noisey", "dead"], [outside_brain_channels, noisey_channels, dead_channels]
     ):
@@ -135,48 +165,35 @@ def get_channel_assignments(
             print(f"No {label} channels found")
         else:
             print(f"{len(channels)} {label} channel(s) found")
+
     if plot_outside_brain_channels:
-        if subject_ID is None:
-            raise ValueError("need specific subject ID to plot")
+        if preprocessed_path is None:
+            raise ValueError("need specific preprocessed path to plot")
         else:
-            fig, axs = plt.subplots(ncols=2, figsize=(40, 60))
-            sw.plot_traces(
-                highpass_rec,
-                channel_ids=all_channel_ids[channel_labels != "out"],
-                backend="matplotlib",
-                clim=(-100, 100),
-                ax=axs[0],
-                return_scaled=True,
-                time_range=[500, 505], #arbitrary time window ~8 min into rec
-                order_channel_by_depth=True,
-                show_channel_ids=True,
-            )
-            if not outside_brain_channels is None:
-                sw.plot_traces(
-                    highpass_rec,
-                    channel_ids=outside_brain_channels,
-                    backend="matplotlib",
-                    clim=(-100, 100),
-                    ax=axs[1],
-                    return_scaled=True,
-                    time_range=[500, 505], #arbitrary time window ~8 min into rec
-                    order_channel_by_depth=True,
-                    show_channel_ids=True,
-                )
-            else:
-                print("no outside brain channels... nothing to plot")
-            fig.savefig(SPIKESORTING_PATH / subject_ID / "outside_brain_channels.png")
+                    
+            fig, axs = plt.subplots(ncols=2)
+
+            mask = np.tile(channel_labels!='good',(10,1))
+            axs[0].imshow(mask.T, aspect='auto',origin='lower')        
+            axs[0].set(title='Bad channels mask')
+
+            sw.plot_traces(highpass_rec, 
+                        channel_ids=all_channel_ids,
+                        backend="matplotlib",
+                        clim=(-100, 100),
+                        ax=axs[1],
+                        return_scaled=True,
+                        time_range=[500, 500.1], #arbitrary 1ms time window ~8 min into rec
+                        order_channel_by_depth=True,
+                        show_channel_ids=False,)
+            axs[1].set(title='Highpass data', xlabel='time (100ms)')
+            fig.savefig(preprocessed_path/ "outside_brain_channels.png")
     # channel assignments dict
     channel_id2assignment = {all_channel_ids[i]: channel_labels[i] for i in range(len(all_channel_ids))}
-    if save:
-        if subject_ID is None:
-            raise print("need subject_ID specified to plot")
-        else:
-            with open(SPIKESORTING_PATH / subject_ID / "channel_assignments.json", "w") as outfile:
-                outfile.write(json.dumps(channel_id2assignment, indent=4))
-            print(f"saved channel assignments to {SPIKESORTING_PATH / subject_ID}")
-    else:
-        return channel_id2assignment
+    with open(preprocessed_path / "channel_assignments.json", "w") as outfile:
+        outfile.write(json.dumps(channel_id2assignment, indent=4))
+
+    return channel_id2assignment
 
 
 def _plot_preprocessed_trace_qc(raw_rec, preprocessed_rec):
@@ -208,14 +225,18 @@ def _plot_preprocessed_trace_qc(raw_rec, preprocessed_rec):
     return fig
 
 
-def run_kilosort4(preprocessed_rec, preprocessed_path):
-    """ """
+def run_kilosort4(preprocessed_rec, preprocessed_path, kilosort_Ths=[9,8]):
+    """ Runs kilosort4 after preprocessing using spike-interface.
+    We allow changes to Th_universal and Th_learned for optimisation, leaving all other parameters default."""
     kilosort_output_path = preprocessed_path / "kilosort4"
-    if not kilosort_output_path.exists():
+    if not (preprocessed_path/'kilosort4').exists(): #if the ks folder exists, assume sorting completed with no bugs.
         print("running Kilosort4")
         kilosort_output_path.mkdir(parents=True)
         sorter_params = ss.get_default_sorter_params("kilosort4")
-        sorter_params["skip_kilosort_preprocessing"] = True
+        sorter_params["do_CAR"] = False #we perform IBL destriping instead using spikeinterface
+        sorter_params["Th_universal"] = kilosort_Ths[0]
+        sorter_params["Th_learned"] = kilosort_Ths[1]
+        sorter_params["nblocks"] = 5 #Default is 1 (rigid), 5 is recommended for single shank neuropixel.
         sorter = ss.run_sorter(
             "kilosort4",
             recording=preprocessed_rec,
@@ -313,51 +334,99 @@ def get_single_units(
 def check_rec_properties(raw_rec):
     '''Function to double-check that the properties of the probe are saved with it.
         These are properties related to the probes used, but can be missing in some recordings.'''
-    if raw_rec.get_property('inter_sample_shift') is None:
-        #Properties about the probe are missing, so we are adding them now:
+    #two conditions where we find errors:
+    if not (SPIKESORTING_PATH/"probe_params").exists():
+        raise print('Missing properties. See check_rec_properties function.')
+    
+    true_location = np.load(SPIKESORTING_PATH/'probe_params'/'location.npy')
+    
+    if not (raw_rec.get_property('location')==true_location).all():
+        #Properties about the probe are missing or have errors, so we are adding them now:
         for property in ['contact_vector','location','group','inter_sample_shift']:
-            if not (SPIKESORTING_PATH/"params").exists():
-                print('Missing properties. See check_rec_properties function.')
-            property_array = np.load(SPIKESORTING_PATH/"params"/f'{property}.npy')
+            property_array = np.load(SPIKESORTING_PATH/"probe_params"/f'{property}.npy')
             raw_rec.set_property(property,property_array)
 
         #NB: if the property files are missing, we originally stored them as follows:
-        #if raw_rec.get_property('inter_sample_shift') is not None: ## Using a recording /with/ the properties.
+        # import SpikeSorting.spikesort_session as sps
+        # if raw_rec.get_property('inter_sample_shift') is not None: ## Using a recording /with/ the properties.
         #    for property in ['contact_vector','location','group','inter_sample_shift']:
-        #        sps.np.save(sps.SPIKESORTING_PATH/"params"/property,raw_rec.get_property(property))
+        #        sps.np.save(sps.SPIKESORTING_PATH/"probe_params"/property,raw_rec.get_property(property))
     return raw_rec
         
-            
+def get_loc_err():
+    '''Debugging code to identify errors in open_ephys recordings.
+    some recordings were missing properties or had wrong location properties.
+    This adds a column to ephys_paths_df which identifies such cases.'''
+    ephys_paths_df = sps.get_ephys_paths_df()
+
+    property_error = []
+    for each_session in ephys_paths_df.ephys_path:
+        try:
+            raw_rec = sps.se.read_openephys(each_session, stream_id="0")
+            checked_location = location = np.load(sps.SPIKESORTING_PATH/"probe_params"/'location.npy')
+            if raw_rec.get_property('inter_sample_shift') is None:
+                property_error.append('missing')
+            elif (raw_rec.get_property('location') == checked_location).all():
+                property_error.append('true')
+            else:
+                property_error.append('wrong')
+                print(raw_rec.get_property('location'))
+        except:
+            property_error.append('not_readable')
+
+    ephys_paths_df['loc_err'] = property_error
+    return ephys_paths_df            
 # %% Filepath management
 
 
 def get_ephys_paths_df():
-    """Tries to open all raw ephys files to check that they are readable (this can take time)"""
+    """Tries to open all raw ephys files to check that they are readable (this can take time).
+        This is stored as tsv file and later read and updated to check whether processing is completed."""
     all_ephys_paths = [f for s in EPHYS_PATH.iterdir() if s.is_dir() for f in s.iterdir() if f.is_dir()]
     all_spikesorting_paths = [f for s in SPIKESORTING_PATH.iterdir() if s.is_dir() for f in s.iterdir() if f.is_dir()]
-    ephys_path_info = []
-    for path in all_ephys_paths:
-        subject_ID = path.parts[-2]
-        datetime_string = path.parts[-1]
-        dt = datetime.strptime(datetime_string, "%Y-%m-%d_%H-%M-%S")
-        spike_sorting_completed = (
-            True if SPIKESORTING_PATH / subject_ID / dt.isoformat() in all_spikesorting_paths else False
-        )
-        try:
-            se.read_openephys(path, stream_id="0")
-            spike_interface_readable = True
-        except:
-            spike_interface_readable = False
-        ephys_path_info.append(
-            {
-                "subject_ID": subject_ID,
-                "datetime": dt.isoformat(),
-                "ephys_path": str(path),
-                "spike_sorting_completed": spike_sorting_completed,
-                "spike_interface_readable": spike_interface_readable,
-            }
-        )
-    return pd.DataFrame(ephys_path_info)
+    
+    if (EPHYS_PATH/"ephys_paths_df.tsv").exists(): #load the df if it already exists.
+        ephys_paths_df = pd.read_csv(EPHYS_PATH/"ephys_paths_df.tsv", sep='\t')
+        ephys_paths_df['datetime']=ephys_paths_df['datetime'].apply(lambda x: pd.to_datetime(x)) #change datetime from str to object
+        #update completion
+        completion = []
+        for path in all_ephys_paths:
+            subject_ID = path.parts[-2]
+            datetime_string = path.parts[-1]
+            dt = datetime.strptime(datetime_string, "%Y-%m-%d_%H-%M-%S")
+            spike_sorting_completed =(SPIKESORTING_PATH/subject_ID/dt.isoformat()/"DONE.txt").exists()
+            completion.append(spike_sorting_completed)
+        ephys_paths_df['spike_sorting_completed'] = completion
+    else: #otherwise generate dataframe from scratch
+        ephys_path_info = [] 
+        for path in all_ephys_paths:
+            subject_ID = path.parts[-2]
+            datetime_string = path.parts[-1]
+            dt = datetime.strptime(datetime_string, "%Y-%m-%d_%H-%M-%S")
+            spike_sorting_completed = (SPIKESORTING_PATH/subject_ID/dt.isoformat()/'DONE.txt').exists()
+            try:
+                rec = se.read_openephys(path, stream_id="0")
+                duration_min = rec.get_num_frames() / (30000*60)
+                spike_interface_readable = True
+            except:
+                spike_interface_readable = False
+
+            ephys_path_info.append(
+                {
+                    "subject_ID": subject_ID,
+                    "datetime": dt,
+                    "ephys_path": str(path),
+                    "spike_sorting_completed": spike_sorting_completed,
+                    "spike_interface_readable": spike_interface_readable,
+                    "duration_min": duration_min,
+                }
+                )
+        ephys_paths_df = pd.DataFrame(ephys_path_info)
+
+    #save for future readout
+    ephys_paths_df.to_csv(EPHYS_PATH/"ephys_paths_df.tsv", sep = '\t', index=False)
+    
+    return ephys_paths_df
 
 
 # %% tests
@@ -365,8 +434,8 @@ def run_test():
     ephys_paths_df = get_ephys_paths_df()
     ephys_info = ephys_paths_df.iloc[0]
     # preprocessing
-    preprocessed_path = SPIKESORTING_PATH / ephys_info.subject_ID / ephys_info.datetime
-    if not preprocessed_path.exists():
+    preprocessed_path = SPIKESORTING_PATH / ephys_info.subject_ID / ephys_info.datetime.isoformat()
+    if not (preprocessed_path/'temp_preprocessed').exists():
         preprocessed_path.mkdir(parents=True)
         raw_rec = se.read_openephys(ephys_info.ephys_path, stream_id="0")  # stream_id="0" is the AP data
         preprocessed_rec = denoise_ephys_data(raw_rec, preprocessed_path, plot=True)

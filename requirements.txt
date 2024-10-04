@@ -1,4 +1,5 @@
 kilosort==4.06
 spikeinterface[full,widgets]
+UnitMatchPy
 seaborn
 jupyter

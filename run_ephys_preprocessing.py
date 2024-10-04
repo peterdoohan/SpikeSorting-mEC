@@ -8,6 +8,11 @@ import os
 from pathlib import Path
 from . import spikesort_session as sps
 
+JOBS_FOLDER = Path('SpikeSorting/jobs/')
+if not JOBS_FOLDER.exists():
+ for sub_folder in ["slurm", "out", "err"]:
+        if not (JOBS_FOLDER/sub_folder).exists():
+            (JOBS_FOLDER/sub_folder).mkdir()
 
 # %% Functions
 # %% ephys preprocessing
@@ -34,11 +39,13 @@ def submit_test_job(ephys_info):
     script_path = get_ephys_preprocessing_SLURM_script(ephys_info)
     os.system(f"chmod +x {script_path}")
     os.system(f"sbatch {script_path}")
-    return print(f"Test job submitted for {ephys_info.subject_ID} {ephys_info.datetime}")
+    return print(f"Test job submitted for {ephys_info.subject_ID} {ephys_info.datetime.isoformat()}")
 
 
-def get_ephys_preprocessing_SLURM_script(ephys_info, spike_sorter="Kilosort4", RAM="64GB", time_limit="48:00:00"):
-    session_ID = f"{ephys_info.subject_ID}_{ephys_info.datetime}_{spike_sorter}"
+def get_ephys_preprocessing_SLURM_script(ephys_info, spike_sorter="Kilosort4", RAM="64GB", time_limit="48:00:00", 
+                                        kilosort_Ths=[9,8], spikesort_path = sps.SPIKESORTING_PATH): #parameters relevant for optimising kilosort.
+    '''Saves a script which submits a SLURM job to perform spikesorting.'''
+    session_ID = f"{ephys_info.subject_ID}_{ephys_info.datetime.isoformat()}_{spike_sorter}"
     script = f"""#!/bin/bash
 #SBATCH --job-name=ephys_preprocessing_{session_ID}
 #SBATCH --output=SpikeSorting/jobs/out/ephys_preprocessing_{session_ID}.out
@@ -59,7 +66,8 @@ conda activate maze_ephys
 
 python -c \"
 from SpikeSorting.spikesort_session import preprocess_ephys_session
-preprocess_ephys_session('{ephys_info.subject_ID}', '{ephys_info.datetime}', '{ephys_info.ephys_path}')
+preprocess_ephys_session('{ephys_info.subject_ID}', '{ephys_info.datetime.isoformat()}', '{ephys_info.ephys_path}',
+                        {kilosort_Ths}, spikesort_path='{spikesort_path}')
 \"
 """
     script_path = f"SpikeSorting/jobs/slurm/ephys_preprocessing_{session_ID}.sh"

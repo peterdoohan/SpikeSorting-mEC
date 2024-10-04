@@ -19,3 +19,44 @@
 
 ## STEP 2: Organise Your Ephys Data
 
+ - We're expecting data which is structured as follows:
+    .
+    └── Experiment/ 
+        ├── code/ 
+        │   └── ... <-- (you are somewhere here)
+        └── data/ 
+            ├── ... 
+            ├── raw_data/
+            │   ├── ...
+            │   └── ephys/
+            │       └── [subject_ID]/
+            │           └── [datetime]/
+            │               └── [Open Ephys data]...
+            └── preprocessed_data/
+                ├── ...
+                └── spikesorting
+                    └── [subject_ID]/
+                        └── ...
+
+ - Make sure your current directory is the 'code' folder
+    ``` bash
+        cd <.../code>
+    ```
+    
+## STEP 3: Perform initial SpikeInterface and kilosort checks
+
+ - Channel assignments
+    For some recordings the probe may not be entirely within the brain.
+    We therefore double-check that outside-brain channels are identified. 
+    Code to do so is given under notebooks/preprocessing_ephys.ipynb.
+
+ - Optimise kilosort
+    This is a ball-park estimation made by slightly tweaking the Th parameters as suggested.
+    (https://kilosort.readthedocs.io/en/stable/parameters.html)
+    We use data from the first and last recordings of each subject.
+    ```bash
+    ipython
+    import optimise_kilosort as ok
+    ok.submit_jobs()
+    ```
+    
