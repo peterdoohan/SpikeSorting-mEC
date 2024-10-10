@@ -20,6 +20,7 @@
 ## STEP 2: Organise Your Ephys Data
 
  - We're expecting data which is structured as follows:
+    ```python
     .
     └── Experiment/ 
         ├── code/ 
@@ -37,6 +38,7 @@
                 └── spikesorting
                     └── [subject_ID]/
                         └── ...
+    ```
 
  - Make sure your current directory is the 'code' folder
     ``` bash
