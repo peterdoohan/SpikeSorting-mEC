@@ -183,7 +183,7 @@ def get_channel_assignments(
                         clim=(-100, 100),
                         ax=axs[1],
                         return_scaled=True,
-                        time_range=[500, 500.1], #arbitrary 1ms time window ~8 min into rec
+                        time_range=[500, 550], #arbitrary 1ms time window ~8 min into rec
                         order_channel_by_depth=True,
                         show_channel_ids=False,)
             axs[1].set(title='Highpass data', xlabel='time (100ms)')

@@ -54,9 +54,12 @@
     This is a ball-park estimation made by slightly tweaking the Th parameters as suggested.
     (https://kilosort.readthedocs.io/en/stable/parameters.html)
     We use data from the first and last recordings of each subject.
+
     ```bash
     ipython
     import optimise_kilosort as ok
     ok.submit_jobs()
+    #then after finishing
+    ok.output_reports()
     ```
-    
+    the summary plots are found under data/preprocessing/spikesorting/kilosort_optim.
