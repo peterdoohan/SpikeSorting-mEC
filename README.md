@@ -6,10 +6,9 @@
     conda create --name maze_ephys python=3.10 
     conda activate maze_ephys
     ```
-- install kilosort 
+- install required packages (assuming you're in .../code)
     ``` bash 
-    pip install kilosort==4.0.8
-    
+    pip install -r SpikeSorting/requirements.txt
     ```
 - install spikeinterface
     ``` bash
@@ -47,12 +46,12 @@
     
 ## STEP 3: Perform initial SpikeInterface and kilosort checks
 
- - Channel assignments
+ - Channel assignments:
     For some recordings the probe may not be entirely within the brain.
     We therefore double-check that outside-brain channels are identified. 
     Code to do so is given under notebooks/preprocessing_ephys.ipynb.
 
- - Optimise kilosort
+ - Optimise kilosort:
     This is a ball-park estimation made by slightly tweaking the Th parameters as suggested.
     (https://kilosort.readthedocs.io/en/stable/parameters.html)
     We use data from the first and last recordings of each subject.
@@ -62,6 +61,6 @@
     import optimise_kilosort as ok
     ok.submit_jobs()
     #then after finishing
-    ok.output_reports()
+    ok.summarise_results()
     ```
     the summary plots are found under data/preprocessing/spikesorting/kilosort_optim.

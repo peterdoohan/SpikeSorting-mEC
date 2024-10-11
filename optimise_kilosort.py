@@ -4,6 +4,7 @@
 # %% Imports
 import os
 from pathlib import Path
+from datetime import datetime
 from datetime import date
 
 from . import spikesort_session as sps
@@ -17,10 +18,13 @@ import seaborn as sns
 SPIKESORTING_PATH = Path("../data/preprocessed_data/spikesorting") 
 # INPUT should only be the range of dates for the experiment. 
 # Define the date range
-START_DATE = date.fromisoformat('2024-02-20')
-END_DATE = date.fromisoformat('2024-04-15')
-
+dates_dict = {'FIRST':date.fromisoformat('2024-02-20'),
+             'LAST':date.fromisoformat('2024-04-15')}
 # We then want to run kilosort with a few test parameters
+param_dict = {'lower':[7,6],
+              'default':[9,8],
+              'higher':[11,10],
+              'highest':[13,12]}
 # on the longest session of each subject on the first and last day of the experiment.
 
 
@@ -31,7 +35,8 @@ def submit_jobs():
     sample_paths_df = get_sample_paths_df() #Get first and last session info
 
     #Make a separate directory for each set of Th parameters.
-    for subfolder, kilosort_Ths in zip(['lower','default','higher', 'highest'],[[7,6],[9,8],[11,10],[13,12]]):
+    for subfolder  in param_dict.keys():
+        kilosort_Ths = param_dict['subfolder']
         spikesorting_path = SPIKESORTING_PATH/'kilosort_optim'/subfolder
         if not spikesorting_path.exists():
             spikesorting_path.mkdir(parents=True)
@@ -53,8 +58,8 @@ def get_sample_paths_df():
     '''
     df = sps.get_ephys_paths_df()
     df['date'] = df['datetime'].apply(lambda x: x.date())  # Create a column of dates
-    df_filtered = df[((df['date']==START_DATE) | 
-                      (df['date']==END_DATE)) & 
+    df_filtered = df[((df['date']==dates_dict['FIRST']) | 
+                      (df['date']==dates_dict['LAST'])) & 
                       (df['spike_interface_readable']==True)]
     # Get the row with the maximum duration_min for each of the two dates (start and end)
     df_filtered['date'] = df_filtered['datetime'].dt.date #ignore time
@@ -64,8 +69,8 @@ def get_sample_paths_df():
 #Functions for plotting
 
     
-def output_reports():
-    '''Outputs summary plots of the optimisation.
+def summarise_results():
+    '''Outputs summary plots of the optimisation and a file with 'kilosort_best_params.py'.
        For both the first and last sessions across mice:
        -n_unit_summary.png plots number of kilosort 'good' units and quality metric IBL 'single' units.
        -qual_metric_dist.png plots kde lineplots for the main quality metrics.
@@ -90,42 +95,38 @@ def get_optim_df():
         spikesorting_path = sps.SPIKESORTING_PATH/'kilosort_optim'/subfolder   
         for each_subject in os.listdir(spikesorting_path):
             for each_session in os.listdir((spikesorting_path/each_subject)):
-                completed = (spikesorting_path/each_subject/each_session/'DONE.txt').exists()
-                optim_info.append({'session_path':spikesorting_path/each_subject/each_session,
-                                'ks_params':subfolder,
-                                'completed':completed })
+                session_path = spikesorting_path/each_subject/each_session
+                session_label = 'first' if datetime.fromisoformat(session_path.parts[-1]).date()==dates_dict['FIRST'] else 'last'
+                completed = (session_path/'DONE.txt').exists()
+                #count kilosort 'n_good' and IBL qualtiy control 'n_single'
+                ks_labels = sps.pd.read_csv(session_path/'kilosort4'/'sorter_output'/'cluster_KSLabel.tsv', sep='\t')
+                good_clusters = ks_labels[ks_labels.KSLabel=='good']
+                qual_df = sps.pd.read_csv(session_path/'quality_metrics.htsv', sep='\t')
+                single_units = sps.get_single_units(qual_df)
+                #save out info to dictionary
+                optim_info.append({'subject_ID': each_subject,
+                                   'session': session_label,
+                                    'ks_params':subfolder,
+                                    'completed':completed,
+                                    'n_good':len(good_clusters),
+                                    'n_single':len(single_units),
+                                    'session_path':session_path,})
     optim_df = sps.pd.DataFrame(optim_info)
     return optim_df
 
 def plot_unit_counts(optim_df):
     '''INPUT: optim_df with info about kilosort parameters
        OUTPUT: a png in ../data/preprocessing/spikesorting/optimise_kilosort.'''
-    # Count 'good' and 'single' units and then plot comparisons
-    optim_df['subject_ID'] = optim_df['session_path'].apply(lambda x: x.parts[-2])
-    optim_df['session'] = optim_df['session_path'].apply(lambda x: 'first' if x.parts[-1][:7]=='2024-02' else 'last')
-
-    n_good = []
-    n_single = []
-    for each_session in optim_df['session_path']:
-        ks_labels = sps.pd.read_csv(each_session/'kilosort4'/'sorter_output'/'cluster_KSLabel.tsv', sep='\t')
-        good_clusters = ks_labels[ks_labels.KSLabel=='good']
-        n_good.append(len(good_clusters))
-        qual_df = sps.pd.read_csv(each_session/'quality_metrics.htsv', sep='\t')
-        single_units = sps.get_single_units(qual_df)
-        n_single.append(len(single_units))
-
-    optim_df['n_good'] = n_good
-    optim_df['n_single'] = n_single
     plot_df = optim_df.melt(id_vars=['session_path','ks_params','subject_ID','session'],
                 value_vars=['n_good','n_single'], var_name='inclusion', value_name='count')
-
     import seaborn as sns
     g = sns.FacetGrid(plot_df, col='session', row='inclusion', hue='subject_ID')
     g.map(sns.scatterplot, "ks_params", "count")
     g.add_legend()
-    g.savefig(SPIKESORTING_PATH/'kilosort_optim'/'unit_counts.png')
-    
-    return print('Saved summary plot')
+    filename = SPIKESORTING_PATH/'kilosort_optim'/'unit_counts.png'
+    g.savefig(filename)
+    print(f'Saved plot to {filename}') 
+    return
 
 def plot_qual_metrics_dist(optim_df, 
                            single_units_only=False, 
@@ -179,10 +180,12 @@ def plot_qual_metrics_dist(optim_df,
         g.add_legend()#
         if single_units_only==True:
             filename = SPIKESORTING_PATH/'kilosort_optim'/'distributions_single_units_all_subs.png'
+            print(f'Saved plot to {filename}')        
         else:
             filename = SPIKESORTING_PATH/'kilosort_optim'/'distributions_all_clusters_all_subs.png'
+            print(f'Saved plot to {filename}') 
         g.savefig(filename)
-    return print('Saved quality metric distribution plot')
+    return g
 
 ## testing / dev functions
 def submit_test():

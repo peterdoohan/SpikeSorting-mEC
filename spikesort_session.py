@@ -22,7 +22,6 @@ from spikeinterface import qualitymetrics as qm
 from spikeinterface import exporters as sx
 from spikeinterface import qualitymetrics as sq
 
-
 # %% Global Variables
 EPHYS_PATH = Path(
     "../data/raw_data/ephys"
@@ -229,6 +228,10 @@ def run_kilosort4(preprocessed_rec, preprocessed_path, kilosort_Ths=[9,8]):
     """ Runs kilosort4 after preprocessing using spike-interface.
     We allow changes to Th_universal and Th_learned for optimisation, leaving all other parameters default."""
     kilosort_output_path = preprocessed_path / "kilosort4"
+    #load best Th parameters if kilosort parameters have been optimised. Otherwise default is given above.
+    if (SPIKESORTING_PATH/'kilosort_optim'/'best_params.json').exists(): 
+        with open(sps.SPIKESORTING_PATH/'kilosort_optim'/'best_params.json', 'r') as f:
+            kilosort_Ths = json.load(f)
     if not (preprocessed_path/'kilosort4').exists(): #if the ks folder exists, assume sorting completed with no bugs.
         print("running Kilosort4")
         kilosort_output_path.mkdir(parents=True)
@@ -236,7 +239,7 @@ def run_kilosort4(preprocessed_rec, preprocessed_path, kilosort_Ths=[9,8]):
         sorter_params["do_CAR"] = False #we perform IBL destriping instead using spikeinterface
         sorter_params["Th_universal"] = kilosort_Ths[0]
         sorter_params["Th_learned"] = kilosort_Ths[1]
-        sorter_params["nblocks"] = 5 #Default is 1 (rigid), 5 is recommended for single shank neuropixel.
+        sorter_params["nblocks"] = 5 #Default is 1 (rigid), 5 is recommended for single shank neuropixel. Shouldn't have a big influence regardless.
         sorter = ss.run_sorter(
             "kilosort4",
             recording=preprocessed_rec,
@@ -357,13 +360,13 @@ def get_loc_err():
     '''Debugging code to identify errors in open_ephys recordings.
     some recordings were missing properties or had wrong location properties.
     This adds a column to ephys_paths_df which identifies such cases.'''
-    ephys_paths_df = sps.get_ephys_paths_df()
+    ephys_paths_df = get_ephys_paths_df()
 
     property_error = []
     for each_session in ephys_paths_df.ephys_path:
         try:
-            raw_rec = sps.se.read_openephys(each_session, stream_id="0")
-            checked_location = location = np.load(sps.SPIKESORTING_PATH/"probe_params"/'location.npy')
+            raw_rec = se.read_openephys(each_session, stream_id="0")
+            checked_location = location = np.load(SPIKESORTING_PATH/"probe_params"/'location.npy')
             if raw_rec.get_property('inter_sample_shift') is None:
                 property_error.append('missing')
             elif (raw_rec.get_property('location') == checked_location).all():

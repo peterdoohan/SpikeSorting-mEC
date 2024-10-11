@@ -57,6 +57,7 @@ def get_ephys_preprocessing_SLURM_script(ephys_info, spike_sorter="Kilosort4", R
 #SBATCH --mem={RAM}
 #SBATCH --time={time_limit}
 
+source /etc/profile.d/modules.sh
 module load miniconda
 module load cuda/11.8
 conda deactivate
