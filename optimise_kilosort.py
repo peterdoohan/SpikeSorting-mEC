@@ -20,6 +20,7 @@ SPIKESORTING_PATH = Path("../data/preprocessed_data/spikesorting")
 # Define the date range
 dates_dict = {'FIRST':date.fromisoformat('2024-02-20'),
              'LAST':date.fromisoformat('2024-04-15')}
+
 # We then want to run kilosort with a few test parameters
 param_dict = {'lower':[7,6],
               'default':[9,8],

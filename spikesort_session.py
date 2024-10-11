@@ -22,6 +22,8 @@ from spikeinterface import qualitymetrics as qm
 from spikeinterface import exporters as sx
 from spikeinterface import qualitymetrics as sq
 
+from . import unit_matching as um
+
 # %% Global Variables
 EPHYS_PATH = Path(
     "../data/raw_data/ephys"
@@ -65,14 +67,16 @@ def preprocess_ephys_session(
         else:
             print("loading cached preprocessed data")
             preprocessed_rec = si.load_extractor(preprocessed_path / "temp_preprocessed")
-        # spikesorting
         print("running spikesorting")
         sorter = run_kilosort4(preprocessed_rec, preprocessed_path, kilosort_Ths)
-        # Compute quality metrics
+        print('Computing quality metrics...')
         quality_metrics_df = get_quality_metrics(sorter, preprocessed_rec, preprocessed_path, save_cluster_reports=True)
         quality_metrics_df.to_csv(preprocessed_path / "quality_metrics.htsv", sep="\t", index=False)
         single_units = get_single_units(quality_metrics_df)
         print(f"Found {len(single_units)} single units, passing quality control")
+        
+        #Save out necessary files for Unit Match
+        um.save_unitmatch_inputs(preprocessed_path, preprocessed_rec)
         # Remove temp files
         if remove_cached_data:
             for temp_folder in ["temp_preprocessed", "sorting_analyser"]:
@@ -230,7 +234,7 @@ def run_kilosort4(preprocessed_rec, preprocessed_path, kilosort_Ths=[9,8]):
     kilosort_output_path = preprocessed_path / "kilosort4"
     #load best Th parameters if kilosort parameters have been optimised. Otherwise default is given above.
     if (SPIKESORTING_PATH/'kilosort_optim'/'best_params.json').exists(): 
-        with open(sps.SPIKESORTING_PATH/'kilosort_optim'/'best_params.json', 'r') as f:
+        with open(SPIKESORTING_PATH/'kilosort_optim'/'best_params.json', 'r') as f:
             kilosort_Ths = json.load(f)
     if not (preprocessed_path/'kilosort4').exists(): #if the ks folder exists, assume sorting completed with no bugs.
         print("running Kilosort4")
@@ -243,7 +247,7 @@ def run_kilosort4(preprocessed_rec, preprocessed_path, kilosort_Ths=[9,8]):
         sorter = ss.run_sorter(
             "kilosort4",
             recording=preprocessed_rec,
-            output_folder=kilosort_output_path,
+            folder=kilosort_output_path,
             verbose=True,
             remove_existing_folder=True,
             **sorter_params,
@@ -303,7 +307,7 @@ def get_quality_metrics(sorter, preprocessed_rec, preprocessed_path, save_cluste
         try:
             sx.export_report(
                 analyzer,
-                output_folder=preprocessed_path / "cluster_reports",
+                folder=preprocessed_path / "cluster_reports",
                 remove_if_exists=True,
             )
         except ValueError:
