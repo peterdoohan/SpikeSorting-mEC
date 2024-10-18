@@ -23,24 +23,12 @@ from spikeinterface import postprocessing as pp
 from spikeinterface import qualitymetrics as qm
 from spikeinterface import exporters as sx
 from spikeinterface import qualitymetrics as sq
-
-#for unit matching
-import UnitMatchPy
-import UnitMatchPy.bayes_functions as bf
-import UnitMatchPy.utils as util
-import UnitMatchPy.overlord as ov
-import numpy as np
-import matplotlib.pyplot as plt
-import UnitMatchPy.save_utils as su
-import UnitMatchPy.GUI as gui
-import UnitMatchPy.assign_unique_id as aid
-import UnitMatchPy.default_params as default_params
-
-import spikeinterface as si
-import spikeinterface.extractors as se
-import spikeinterface.sorters as ss
-import spikeinterface.preprocessing as spre
+# for saving unit match inputs:
 import UnitMatchPy.extract_raw_data as erd
+
+
+
+
 
 # %% Global Variables
 EPHYS_PATH = Path(
@@ -92,9 +80,8 @@ def preprocess_ephys_session(
         quality_metrics_df.to_csv(preprocessed_path / "quality_metrics.htsv", sep="\t", index=False)
         single_units = get_single_units(quality_metrics_df)
         print(f"Found {len(single_units)} single units, passing quality control")
-        
-        #Save out necessary files for Unit Match
-        save_unitmatch_inputs(preprocessed_path, preprocessed_rec)
+        print('Saving out waveforms for UnitMatch.')
+        save_unitmatch_inputs(preprocessed_rec, preprocessed_path)
         # Remove temp files
         if remove_cached_data:
             for temp_folder in ["temp_preprocessed", "sorting_analyser"]:
@@ -281,7 +268,7 @@ def run_kilosort4(preprocessed_rec, preprocessed_path, kilosort_Ths=[9,8]):
     return sorter
 
 
-def save_unitmatch_inputs(preprocessed_path, preprocessed_data):
+def save_unitmatch_inputs(preprocessed_rec, preprocessed_path):
     '''To be run within spikesort_session.py after kilosort outputs but before temp_processed folder is deleted.
     INPUTS: path/to/preprocessed/spikesorting/sub/session, 
             IBL preprocessed data in spikeinterface format,
@@ -291,7 +278,7 @@ def save_unitmatch_inputs(preprocessed_path, preprocessed_data):
 '''
     
     #First we set up our recording and sorting
-    recording = preprocessed_data
+    recording = preprocessed_rec
     sorting = se.read_kilosort(preprocessed_path/'kilosort4'/'sorter_output')
     #get a list of units used - we use all of them
     unit_used = sorting.get_property('original_cluster_id')
@@ -310,8 +297,8 @@ def save_unitmatch_inputs(preprocessed_path, preprocessed_data):
     #Next, we create a sorting analyzer to get the average waveform
     split_analysers = []
     split_analysers.append(si.create_sorting_analyzer(split_sorting[0], split_recording[0], sparse=False))
-    split_analysers.append(si.create_sorting_analyzer(split_sorting[1], recording[1], sparse=False))
-    all_waveforms = [] #here we store all the waveforms
+    split_analysers.append(si.create_sorting_analyzer(split_sorting[1], split_recording[1], sparse=False))
+    
     for half in range(2):
         split_analysers[half].compute(
             "random_spikes",
@@ -322,19 +309,15 @@ def save_unitmatch_inputs(preprocessed_path, preprocessed_data):
     templates_second = split_analysers[1].get_extension('templates')
     t1 = templates_first.get_data()
     t2 = templates_second.get_data()
-    all_waveforms.append(np.stack((t1,t2), axis = -1))
-    #at this point we need a channel positions array
-    all_positions = []
-    for i in range(2):
-        #positions for first half and second half are the same
-        all_positions.append(split_analysers[i].get_channel_locations())
-    
+    all_waveforms = np.stack((t1,t2), axis = -1) #here we store all the waveforms
+
     #That's all we need! now we save it all!
     UM_input_dir = preprocessed_path/'UM_inputs'
-    UM_input_dir.mkdir(exist_ok=True)
-    for i in range(2): #for each split half
-        erd.save_avg_waveforms(all_waveforms[i], UM_input_dir, good_units=0, extract_good_units_only = False)
-        np.save(UM_input_dir/'channel_positions.npy', all_positions[i])
+    UM_input_dir.mkdir(exist_ok=True,parents=True)
+    erd.save_avg_waveforms(all_waveforms, UM_input_dir.resolve(), #absolute path for unitmatch 
+                                good_units=0, extract_good_units_only = False)
+    positions = split_analysers[0].get_channel_locations() #save positions from one of the split halves
+    np.save(UM_input_dir/'channel_positions.npy', positions)
     return print(f'UnitMatch waveforms saved to {UM_input_dir}')
     
 
@@ -382,7 +365,7 @@ def get_quality_metrics(sorter, preprocessed_rec, preprocessed_path, save_cluste
         try:
             sx.export_report(
                 analyzer,
-                folder=preprocessed_path / "cluster_reports",
+                output_folder=preprocessed_path / "cluster_reports",
                 remove_if_exists=True,
             )
         except ValueError:

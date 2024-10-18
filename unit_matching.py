@@ -19,7 +19,8 @@ def send_test_jobs():
     '''Sends mEC2 first day sessions to be processed.'''
     ephys_df = sps.get_ephys_paths_df()
     ephys_df = ephys_df.sort_values(by=['datetime'])
-    for index in [17,19,20]: #hardcoding here is a bit ugly, but go find a few within day sessions.
+    for index in [19,20]: #hardcoding here is a bit ugly, but go find a few within day sessions.
         ephys_info = ephys_df.iloc[index]
-        run_e.submit_test_job(ephys_info)
+        if ephys_info['spike_interface_readable'] == True:
+            run_e.submit_test_job(ephys_info)
     return print('Submitted a few jobs to test UM outputs')
