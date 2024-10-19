@@ -401,8 +401,8 @@ def check_rec_properties(raw_rec):
         These are properties related to the probes used, but can be missing in some recordings.'''
     #two conditions where we find errors:
     if not (SPIKESORTING_PATH/"probe_params").exists():
-        raise print('Missing properties. See check_rec_properties function.')
-    
+        save_rec_properties()
+
     true_location = np.load(SPIKESORTING_PATH/'probe_params'/'location.npy')
     
     if not (raw_rec.get_property('location')==true_location).all():
@@ -410,14 +410,24 @@ def check_rec_properties(raw_rec):
         for property in ['contact_vector','location','group','inter_sample_shift']:
             property_array = np.load(SPIKESORTING_PATH/"probe_params"/f'{property}.npy')
             raw_rec.set_property(property,property_array)
-
-        #NB: if the property files are missing, we originally stored them as follows:
-        # import SpikeSorting.spikesort_session as sps
-        # if raw_rec.get_property('inter_sample_shift') is not None: ## Using a recording /with/ the properties.
-        #    for property in ['contact_vector','location','group','inter_sample_shift']:
-        #        sps.np.save(sps.SPIKESORTING_PATH/"probe_params"/property,raw_rec.get_property(property))
+       
     return raw_rec
         
+def save_rec_properties():
+    ''' Function to save out properties of the probe, simply based on the first recording.
+    NB: these might need to be double-checked, since we had a few probes where the location property was weird.
+    See function below.'''  
+    index = 0 # <-- this might have to be changed if the first recording doesn't work.
+    raw_rec = se.read_openephys(get_ephys_paths_df().iloc[index].ephys_path, 
+                            stream_id="0")
+    if raw_rec.get_property('inter_sample_shift') is not None: ## Using a recording /with/ the properties.
+        print('Saving out properties of probe.')
+        (SPIKESORTING_PATH/'probe_params').mkdir(exist_ok=True)
+        for property in ['contact_vector','location','group','inter_sample_shift']:
+            np.save(SPIKESORTING_PATH/"probe_params"/property,raw_rec.get_property(property))
+    else: #If the first recording by chance doesn't have the correct properties, try another.
+        raise print('Failed saving out probe properties. See save_rec_properties() function.')
+
 def get_loc_err():
     '''Debugging code to identify errors in open_ephys recordings.
     some recordings were missing properties or had wrong location properties.

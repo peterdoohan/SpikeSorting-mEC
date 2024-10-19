@@ -51,7 +51,7 @@ def submit_jobs():
                                                               spikesort_path=spikesorting_path)
             os.system(f"chmod +x {script_path}")
             os.system(f"sbatch {script_path}")
-            print(f"Test job submitted for {ephys_info.subject_ID} {ephys_info.datetime.isoformat()}")
+            print(f"Test job submitted for {ephys_info.subject_ID} {ephys_info['datetime'].isoformat()}")
 
 def get_sample_paths_df():
     '''INPUT: the start and end date of the experiment, in datetime format.
