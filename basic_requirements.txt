@@ -1,0 +1,5 @@
+spikeinterface[full,widgets]
+kilosort
+UnitMatchPy
+seaborn
+jupyter

@@ -65,7 +65,7 @@ def preprocess_ephys_session(
                 print("Caching preprocessed data")
                 if not temp_path.exists():
                     temp_path.mkdir()
-                preprocessed_rec.save(
+                preprocessed_rec = preprocessed_rec.save(
                     folder=preprocessed_path / "temp_preprocessed",
                     format="binary",
                     overwrite=True,
@@ -233,9 +233,10 @@ def _plot_preprocessed_trace_qc(raw_rec, preprocessed_rec):
     return fig
 
 
-def run_kilosort4(preprocessed_rec, preprocessed_path, kilosort_Ths=[9,8]):
+def run_kilosort4(preprocessed_rec, preprocessed_path, kilosort_Ths=[9,8], IBL_preprocessing = True):
     """ Runs kilosort4 after preprocessing using spike-interface.
-    We allow changes to Th_universal and Th_learned for optimisation, leaving all other parameters default."""
+    We allow changes to Th_universal and Th_learned for optimisation, leaving all other parameters default.
+    We also allow a toggle for IBL-style preprocessing of data, noting that Kilosort processes raw data faster."""
     kilosort_output_path = preprocessed_path / "kilosort4"
     #load best Th parameters if kilosort parameters have been optimised. Otherwise default is given above.
     if (SPIKESORTING_PATH/'kilosort_optim'/'best_params.json').exists(): 
@@ -272,7 +273,7 @@ def save_unitmatch_inputs(preprocessed_rec, preprocessed_path):
     '''To be run within spikesort_session.py after kilosort outputs but before temp_processed folder is deleted.
     INPUTS: path/to/preprocessed/spikesorting/sub/session, 
             IBL preprocessed data in spikeinterface format,
-            path/to/preprocessed/sub/spikesorting/session/kilosort4/sorter_output
+            path/to/preprocessed/sub/spikesorting/session/kilosort4/sorter_output,
     OUTPUTS: raw waveforms for a session for later unit matching. 
              path/to/preprocessed/spikesorting/sub/session/UM_inputs
 '''
@@ -318,11 +319,27 @@ def save_unitmatch_inputs(preprocessed_rec, preprocessed_path):
                                 good_units=0, extract_good_units_only = False)
     positions = split_analysers[0].get_channel_locations() #save positions from one of the split halves
     np.save(UM_input_dir/'channel_positions.npy', positions)
-    #Turns out we must also copy over cluster_group.npy from kilosort output folder
-    shutil.copy((preprocessed_path/'kilosort4'/'sorter_output'/'cluster_group.tsv'), UM_input_dir)
+    save_unitmatch_labels(preprocessed_path) #Separate funciton as we might have to run and adjust later.
     
     return print(f'UnitMatch waveforms saved to {UM_input_dir}')
     
+def save_unitmatch_labels(preprocessed_path):
+    ''' INPUT: path object to preprocessed data
+        OUTPUT: cluster_group.tsv file with 'mua' and 'good' labels assigned by quality metrics'''
+    quality_metrics_df = pd.read_csv(preprocessed_path/'cluster_reports'/'quality metrics.csv')
+    #assign single units with lenient thresholding
+    single_units = get_single_units(quality_metrics_df,
+    isi_violations_ratio_thres=0.2, #0.2 instead of 0.1
+    amplitude_cutoff_thres=0.1,
+    firing_rate_thres=0.1,
+    presence_ratio_thres=0.8, #0.8 instead of 0.9
+    amplitude_median_thres=40) #40 instead of 50
+    cluster_group_df = pd.read_csv(preprocessed_path/'kilosort4'/'sorter_output'/'cluster_group.tsv', sep='\t')
+    cluster_group_df['KSLabel'] = 'mua'
+    cluster_group_df.loc[single_units, 'KSLabel'] ='good'
+    cluster_group_df.to_csv(preprocessed_path/'UM_inputs'/'cluster_group.tsv', 
+                            sep='\t', index=False) #index false is important here.
+    return cluster_group_df
 
 def get_quality_metrics(sorter, preprocessed_rec, preprocessed_path, save_cluster_reports):
     sorter = sc.remove_excess_spikes(sorter, preprocessed_rec)
@@ -506,6 +523,9 @@ def get_ephys_paths_df():
     
     return ephys_paths_df
 
+# %% Running kilosort on raw data
+
+
 
 # %% tests
 def run_test():
@@ -518,7 +538,7 @@ def run_test():
         raw_rec = se.read_openephys(ephys_info.ephys_path, stream_id="0")  # stream_id="0" is the AP data
         preprocessed_rec = denoise_ephys_data(raw_rec, preprocessed_path, plot=True)
         print("Caching preprocessed data")
-        preprocessed_rec.save(
+        preprocessed_rec = preprocessed_rec.save(
             folder=preprocessed_path / "temp_preprocessed",
             format="binary",
             overwrite=True,
