@@ -318,6 +318,9 @@ def save_unitmatch_inputs(preprocessed_rec, preprocessed_path):
                                 good_units=0, extract_good_units_only = False)
     positions = split_analysers[0].get_channel_locations() #save positions from one of the split halves
     np.save(UM_input_dir/'channel_positions.npy', positions)
+    #Turns out we must also copy over cluster_group.npy from kilosort output folder
+    shutil.copy((preprocessed_path/'kilosort4'/'sorter_output'/'cluster_group.tsv'), UM_input_dir)
+    
     return print(f'UnitMatch waveforms saved to {UM_input_dir}')
     
 
@@ -533,3 +536,5 @@ def run_test():
     single_units = get_single_units(quality_metrics_df)
     print(f"Found {len(single_units)} single units, passing quality control")
     return
+
+
