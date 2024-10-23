@@ -400,6 +400,7 @@ def get_single_units(
     firing_rate_thres=0.1,
     presence_ratio_thres=0.9,
     amplitude_median_thres=50,
+    sd_ratio_thres=3,
 ):
     """
     Filter sortered clusters by quality metrics to find single units (clusters that pass QC metrics)
@@ -412,7 +413,7 @@ def get_single_units(
         ]
     )
     qc_pass_df = quality_metric_df[isi_violations_mask]
-    remaining_query = f"amplitude_cutoff < {amplitude_cutoff_thres} and firing_rate > {firing_rate_thres} and presence_ratio > {presence_ratio_thres} and amplitude_median > {amplitude_median_thres}"
+    remaining_query = f"amplitude_cutoff < {amplitude_cutoff_thres} and firing_rate > {firing_rate_thres} and presence_ratio > {presence_ratio_thres} and amplitude_median > {amplitude_median_thres} and sd_ratio < {sd_ratio_thres}"
     qc_pass_df = qc_pass_df.query(remaining_query)
     return qc_pass_df.unit_id.values
 
