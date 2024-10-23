@@ -3,6 +3,7 @@
 
 # %% Imports
 import os
+import json
 from pathlib import Path
 from datetime import datetime
 from datetime import date
@@ -85,8 +86,15 @@ def summarise_results():
         plot_unit_counts(optim_df)
         plot_qual_metrics_dist(optim_df, single_units_only=False)
         plot_qual_metrics_dist(optim_df, single_units_only=True)
-    
-    #First get a dataframe 
+    #Then save out a json with the best parameters
+    overall_mean_df = optim_df.groupby(['ks_params']).mean('n_single')
+    best_params_label = overall_mean_df['n_single'].idxmax()
+    best_params_list = param_dict[best_params_label]
+    print(f'Optimisation recommends using the {best_params_label} parameters')
+    with open(sps.SPIKESORTING_PATH/'kilosort_optim'/'best_params.json', 'w') as f:
+        json.dump(best_params_list, f)
+    return print('Done summarising results.')
+
 
 def get_optim_df():
     '''Generates dataframe for the optimisation process.

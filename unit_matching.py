@@ -25,16 +25,22 @@ import UnitMatchPy.assign_unique_id as aid
 import UnitMatchPy.default_params as default_params
 
 
-## 
-#UM_OUT_PATH = sps.SPIKESORTING_PATH.parts()[:-1]/'UnitMatch' #just inheriting here for less user input.
+## SET UP UNIT_MATCH PARAMETERS
+
+PARAM = default_params.get_default_param() #default is ready for Neuropixel 2.0 probes
+
+PARAM['no_shanks'] = 1 #Neuropixel 1.0 probe
+PARAM['shank_dist'] = 0 #Neuropixel 1.0 probe
+#Changing distances and radii might be useful for across-day matching.
+PARAM['max_dist'] = 250 #default for Neuropixel 2.0 is 100
+PARAM['channel_radius'] = 400 #default for Neuropixel 2.0 is 150
 
 def run_unit_match():
     ''' Top level function to submit a bunch of jobs for unit matching.'''
     #Find all within-subject session pairs where preproecssing has been completed
     
     
-
-def unit_match_sessions(subject = str, datetime1 = str, datetime2 = str):
+def unit_match_sessions(subject = str, datetime1 = str, datetime2 = str, params = PARAM):
     '''Code to unit_match sessions, taking inputs in the form of:
     INPUT: subject and datetime isoformat strings. These need to match data path formats.
     OUTPUT: [...]
@@ -44,11 +50,9 @@ def unit_match_sessions(subject = str, datetime1 = str, datetime2 = str):
                         (sps.SPIKESORTING_PATH/subject/datetime2/'UM_inputs')]
     UM_out_path = Path('../data/preprocessed_data/UnitMatch')/subject/f'{datetime1}x{datetime2}'
     UM_out_path.mkdir(parents=True,exist_ok=True)
-    
-    # default of Spikeinterface as by default spike interface extracts waveforms in a different manner.
-    param = {'SpikeWidth': 90, 'waveidx': np.arange(20,50), 'PeakLoc': 35}
-    param = default_params.get_default_param()
     param['session_paths'] = all_session_paths
+    
+   
     wave_paths, unit_label_paths, channel_pos = util.paths_from_KS(all_session_paths)
     print('reading Raw waveform data')
     waveform, session_id, session_switch, within_session, good_units, param = util.load_good_waveforms(wave_paths, unit_label_paths, param, 
@@ -67,20 +71,8 @@ def unit_match_sessions(subject = str, datetime1 = str, datetime2 = str):
     total_score, candidate_pairs, scores_to_include, predictors  = ov.extract_metric_scores(wave_dict, session_switch, within_session, param, niter  = 2)
 
     #Probability analysis
-    prior_match = 1 - (param['n_expected_matches'] / param['n_units']**2 ) # freedom of choose in prior prob
-    priors = np.array((prior_match, 1-prior_match))
-
-    labels = candidate_pairs.astype(int)
-    cond = np.unique(labels)
-    score_vector = param['score_vector']
-    parameter_kernels = np.full((len(score_vector), len(scores_to_include), len(cond)), np.nan)
-
-    parameter_kernels = bf.get_parameter_kernels(scores_to_include, labels, cond, param, add_one = 1)
-
-    probability = bf.apply_naive_bayes(parameter_kernels, priors, predictors, param, cond)
-
-    output_prob_matrix = probability[:,1].reshape(param['n_units'],param['n_units'])
-
+    output_prob_matrix = get_output_prob_matrix(param,total_score, candidate_pairs, scores_to_include, predictors)
+    
     util.evaluate_output(output_prob_matrix, param, within_session, session_switch, match_threshold = 0.75)
 
     output_threshold = np.zeros_like(output_prob_matrix)
@@ -100,10 +92,51 @@ def get_unitmatch_reports(subject = str, datetime1 = str, datetime2 = str):
 
 ## Utility
 
-def get_um_pair_path(subject: str, datetime1: str, datetime2: str):
-    '''Takes subject and session info, turns into a unit_match folder for the pair'''
-    folder_path = UM_OUT_PATH/subject/f"{datetime1}x{datetime2}"
-    folder_path.mkdir(parents=True,exist_ok=True)
+def get_output_prob_matrix(param, total_score, candidate_pairs, scores_to_include, predictors):
+    prior_match = 1 - (param['n_expected_matches'] / param['n_units']**2 ) # freedom of choose in prior prob
+    priors = np.array((prior_match, 1-prior_match))
+
+    labels = candidate_pairs.astype(int)
+    cond = np.unique(labels)
+    score_vector = param['score_vector']
+    parameter_kernels = np.full((len(score_vector), len(scores_to_include), len(cond)), np.nan)
+
+    parameter_kernels = bf.get_parameter_kernels(scores_to_include, labels, cond, param, add_one = 1)
+
+    probability = bf.apply_naive_bayes(parameter_kernels, priors, predictors, param, cond)
+
+    output_prob_matrix = probability[:,1].reshape(param['n_units'],param['n_units'])
+    return output_prob_matrix
+
+def pad_UM_inputs(preprocessed_path):
+    ''' Function to account for different numbers of channels between sessions,
+    due to outside brain channels being removed in preprocessing.'''
+    max_n_channels = 384 #set to neuropixel 1.0 count
+
+    # First we pad positions, shaped [n_channels,n_coords]:
+    positions = np.load(preprocessed_path / 'UM_inputs' / 'channel_positions.npy')
+    if positions.shape[0]<max_n_channels:
+        n_pad = max_n_channels-positions.shape[0]
+        positions_padded = np.concatenate([positions, np.zeros((n_pad, 2))], axis=0)
+        print(f'Padding data to {max_n_channels} channels')
+        np.save((preprocessed_path / 'UM_inputs' / 'channel_positions.npy'), positions_padded)
+    
+    # Next, we pad units
+    raw_waveforms_dir = preprocessed_path / 'UM_inputs' / 'RawWaveforms'
+    unit_files = list(raw_waveforms_dir.glob('Unit*_RawSpikes.npy'))
+    for unit_file in unit_files:
+        # Load raw spikes and positions for each unit
+        raw_spikes = np.load(unit_file)
+
+        # double-check padding is needed
+        if raw_spikes.shape[1]<max_n_channels:
+            # Pad raw spikes along the second axis (channels)
+            n_pad = max_n_channels - raw_spikes.shape[1]
+            raw_spikes_padded = np.concatenate([raw_spikes, np.zeros((raw_spikes.shape[0], n_pad, raw_spikes.shape[2]))], axis=1)
+            # Save the padded data, overwriting the original files
+            np.save(unit_file, raw_spikes_padded)  # Overwrite the raw spikes file 
+    return
+
     
 def zero_center_waveform(waveform):
     """
