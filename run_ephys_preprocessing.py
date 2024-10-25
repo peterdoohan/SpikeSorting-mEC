@@ -17,10 +17,10 @@ if not JOBS_FOLDER.exists():
 # %% Functions
 # %% ephys preprocessing
 def run_ephys_preprocessing():
-    ephys_paths_df = sps.get_ephys_paths_df()
-    assert not ephys_paths_df.empty, "No valid ephys sessions found. Check data paths & get_ephys_paths_df() function."
+    unsorted_ephys_paths_df = sps.get_ephys_paths_df().query('spike_interface_readable==True and duration_min>5 and spike_sorting_completed ==False')
+    assert not unsorted_ephys_paths_df.empty, "No valid ephys sessions found. Check data paths & get_ephys_paths_df() function."
     # find unspike-sorted sessions
-    unsorted_ephys_paths_df = ephys_paths_df[~ephys_paths_df.spike_sorting_completed]
+    #unsorted_ephys_paths_df = ephys_paths_df[~ephys_paths_df.spike_sorting_completed]
     if unsorted_ephys_paths_df.empty:
         return print("Ephys preprocessing already complete or data not found.")
     # check jobs folder exits
@@ -57,7 +57,7 @@ def get_ephys_preprocessing_SLURM_script(ephys_info, spike_sorter="Kilosort4", R
 #SBATCH --mem={RAM}
 #SBATCH --time={time_limit}
 
-source /etc/profile.d/modules.sh
+source $(conda info --base)/etc/profile.d/conda.sh
 module load miniconda
 module load cuda/11.8
 conda deactivate

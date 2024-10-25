@@ -23,6 +23,7 @@ from spikeinterface import postprocessing as pp
 from spikeinterface import qualitymetrics as qm
 from spikeinterface import exporters as sx
 from spikeinterface import qualitymetrics as sq
+
 # for saving unit match inputs:
 import UnitMatchPy.extract_raw_data as erd
 
@@ -38,6 +39,7 @@ SPIKESORTING_PATH = Path(
     "../data/preprocessed_data/spikesorting"
 )  # Path("/Volumes/behrens/peter_doohan/goalNav_opto-mFC/ephys_control/data/preprocessed_data/spikesorting")
 
+SAMPLING_FREQUENCY = 30000 #30kHz sampling rate used for AP data.
 
 si.set_global_job_kwargs(n_jobs=80, chunk_duration="1s", progress_bar=True)
 # %% Functions
@@ -59,7 +61,8 @@ def preprocess_ephys_session(
         if not temp_path.exists(): #If a temporary cached file already exists, we can go straight to loading (see else:)
             print('Not DONE... preprocessing data')
             preprocessed_path.mkdir(parents=True, exist_ok=True)
-            raw_rec = se.read_openephys(ephys_path, stream_id="0")  # stream_id="0" is the AP data
+            stream_id = get_stream_id(ephys_path, datatype='AP')
+            raw_rec = se.read_openephys(ephys_path, stream_id=stream_id)  # stream_id="0" is the AP data
             preprocessed_rec = denoise_ephys_data(raw_rec, preprocessed_path, plot=save_QC_plots)
             if cache_preprocessed_data:
                 print("Caching preprocessed data")
@@ -233,7 +236,7 @@ def _plot_preprocessed_trace_qc(raw_rec, preprocessed_rec):
     return fig
 
 
-def run_kilosort4(preprocessed_rec, preprocessed_path, kilosort_Ths=[9,8], IBL_preprocessing = True):
+def run_kilosort4(preprocessed_rec, preprocessed_path, kilosort_Ths=[9,8]):
     """ Runs kilosort4 after preprocessing using spike-interface.
     We allow changes to Th_universal and Th_learned for optimisation, leaving all other parameters default.
     We also allow a toggle for IBL-style preprocessing of data, noting that Kilosort processes raw data faster."""
@@ -417,6 +420,40 @@ def get_single_units(
     qc_pass_df = qc_pass_df.query(remaining_query)
     return qc_pass_df.unit_id.values
 
+# %% error catching and fixing - functions which fix manual OpenEphys recording errors.
+
+def get_stream_id(ephys_path, data_type='AP'):
+    '''INPUT: ephys_path and specification to read AP or LFP data.
+       OUTPUT: the correct stream_id for spike-interface open ephys reading.
+       
+       Notes: fixes an issue where multiple node recordings duplicated data in subject folders.
+       multiple stream id's would misalign to the incorrect subject data.
+       We do this instead of removing data; this data check relies on probes being named by subject,
+       and channels being named by datatype (AP or LFP). 
+       
+       Defaults to reading the first stream_id=0, i.e., reading the first folder in
+       '../data/raw_data/ephys/subject/datetime/Record Node X/experiment1/recording1/continuous/'''
+       
+    #Strategy here is to iterate over stream_id's until we get a matching subject and datatype.
+    #If there's no match, we default to stream_id = "0", 
+    # explicitly, we assume that there's only one subject's data and it's sampled at 30kHz.
+    data_type = 'AP'
+    subject_str = Path(ephys_path).parts[-2].replace("_","") #open_ephys doesn't allow underscores.
+    try:
+        for i in range(8):
+            rec = se.read_openephys(ephys_path, stream_id=f'{i}')
+            subject_match = (subject_str == rec.get_annotation('probes_info')[0]['name'])
+            data_match = True if f'{data_type}' in rec.channel_ids[0] else False
+            if (subject_match and data_match):
+                stream_id = i #successful if probe name and datatype match.
+                break
+            else: 
+                stream_id=0
+    except: #if there's no matches or the data is not readable:
+        stream_id=0
+
+    return str(stream_id) #must be string format.
+
 def check_rec_properties(raw_rec):
     '''Function to double-check that the properties of the probe are saved with it.
         These are properties related to the probes used, but can be missing in some recordings.'''
@@ -501,11 +538,15 @@ def get_ephys_paths_df():
             dt = datetime.strptime(datetime_string, "%Y-%m-%d_%H-%M-%S")
             spike_sorting_completed = (SPIKESORTING_PATH/subject_ID/dt.isoformat()/'DONE.txt').exists()
             try:
-                rec = se.read_openephys(path, stream_id="0")
-                duration_min = rec.get_num_frames() / (30000*60)
+                stream_id = get_stream_id(path)
+                rec = se.read_openephys(path, stream_id=stream_id)
+                if rec.sampling_frequency != SAMPLING_FREQUENCY:
+                    raise print(f'Data sampled at {rec.sampling_frequency}, not matching expected frequency.')
+                duration_min = rec.get_num_frames() / (SAMPLING_RATE*60)
                 spike_interface_readable = True
             except:
                 spike_interface_readable = False
+                duration_min = 0
 
             ephys_path_info.append(
                 {
@@ -523,10 +564,6 @@ def get_ephys_paths_df():
     ephys_paths_df.to_csv(EPHYS_PATH/"ephys_paths_df.tsv", sep = '\t', index=False)
     
     return ephys_paths_df
-
-# %% Running kilosort on raw data
-
-
 
 # %% tests
 def run_test():

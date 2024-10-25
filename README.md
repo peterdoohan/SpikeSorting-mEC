@@ -3,7 +3,7 @@
 ## STEP 1: Create a new environment
 - create new conda environment 
     ``` bash 
-    conda create --name maze_ephys python=3.10 
+    conda create --name maze_ephys python==3.10 
     conda activate maze_ephys
     ```
 - install required packages (assuming you're in .../code)
