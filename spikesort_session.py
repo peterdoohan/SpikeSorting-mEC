@@ -61,7 +61,7 @@ def preprocess_ephys_session(
         if not temp_path.exists(): #If a temporary cached file already exists, we can go straight to loading (see else:)
             print('Not DONE... preprocessing data')
             preprocessed_path.mkdir(parents=True, exist_ok=True)
-            stream_id = get_stream_id(ephys_path, datatype='AP')
+            stream_id = get_stream_id(ephys_path, data_type='AP')
             raw_rec = se.read_openephys(ephys_path, stream_id=stream_id)  # stream_id="0" is the AP data
             preprocessed_rec = denoise_ephys_data(raw_rec, preprocessed_path, plot=save_QC_plots)
             if cache_preprocessed_data:

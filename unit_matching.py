@@ -26,6 +26,11 @@ import UnitMatchPy.GUI as gui
 import UnitMatchPy.assign_unique_id as aid
 import UnitMatchPy.default_params as default_params
 
+#to help plot reports:
+from spikeinterface import core as si
+import spikeinterface.widgets as sw
+
+
 
 ## SET UP UNIT_MATCH PARAMETERS
 
@@ -49,48 +54,42 @@ def run_pairwise_unit_match(um_paths_df):
 
     #Pair-wise iterating script
     for each_subject in um_paths_df['subject_ID'].unique():
-        subject_df = um_paths_df[um_paths_df['subject_ID']==each_subject]
-        sessions = subject_df['datetime'].apply(lambda x: x.isoformat())
-        session_pairs = list(combinations(sessions,2))
-        for pair in session_pairs:
-            print(f"Session pair: {pair[0]} and {pair[1]}")
-            UM_out_path = Path('../data/preprocessed_data/UnitMatch')/each_subject/f'{pair[0]}x{pair[1]}'
+        pairs_df = get_pairs_df(each_subject)
+        for pair in pairs_df.iterrows():
+            print(f"Subject {each_subject}, sessions {pair['datetimes']}")
+            UM_out_path = Path(pair['UM_out_path'])
             UM_out_path.mkdir(parents=True,exist_ok=True)
-            preprocessed_path1= sps.SPIKESORTING_PATH/each_subject/pair[0]
-            preprocessed_path2= sps.SPIKESORTING_PATH/each_subject/pair[1]
-            for preprocessed_path in [preprocessed_path1,preprocessed_path2]:
+            for preprocessed_path in pair['preprocessed_paths']:
                 sps.save_unitmatch_labels(preprocessed_path)
                 pad_UM_inputs(preprocessed_path)
             print(f'Output path: {UM_out_path}')
             try: 
-                unit_match_sessions(each_subject, pair[0], pair[1])
+                unit_match_sessions(pair['UM_input_paths'])
             except Exception as e:
                 print('Error running unitmatch. Saving error log to output path.')
                 with open((UM_out_path/'failed_unitmatch.txt'), 'a') as f: 
-                    f.write(str(e) + '\n') 
-                
-            #um.get_match_reports(each_subject, pair[0],pair[1])
+                    f.write(str(e) + '\n')     
+            um.get_match_reports(pair)
             
-def unit_match_sessions(paths_UM_inputs, param = PARAM):
+def unit_match_sessions(UM_input_paths, param = PARAM):
     '''Code to match units across sessions, taking inputs in the form of:
     INPUT: list of session path objects: 'SPIKESORTING_PATH/subject/datetime/'UM_inputs'. 
             parameters for unit match (n_shanks, max_dist, channel_radius et.c.)
     OUTPUT: saves 'standard' unit match outputs to a folder in:
             .../preprocessed_data/UnitMatch/subject/datetime1xdatetime2 (longer if more than two sessions)
-
     '''
     #Double-check all sessions are from the same subject:
-    subject_list = [x.parts[-3] for x in paths_UM_inputs]
+    subject_list = [x.parts[-3] for x in UM_input_paths]
     if not all(s == subject_list[0] for s in subject_list):
         raise print('Failed unitmatching. Not all sessions are from the same subject.')
         
-    datetimes = [x.parts[-2] for x in paths_UM_inputs]
+    datetimes = [x.parts[-2] for x in UM_input_paths]
     joined_datetimes = 'x'.join(datetimes)
     UM_out_path = Path('../data/preprocessed_data/UnitMatch')/subject_list[0]/f'{joined_datetimes}'
     UM_out_path.mkdir(parents=True,exist_ok=True)
-    param['session_paths'] = paths_UM_inputs
+    param['session_paths'] = UM_input_paths
     
-    wave_paths, unit_label_paths, channel_pos = util.paths_from_KS(paths_UM_inputs)
+    wave_paths, unit_label_paths, channel_pos = util.paths_from_KS(UM_input_paths)
     print('reading Raw waveform data')
     
     waveform, session_id, session_switch, within_session, good_units, param = util.load_good_waveforms(wave_paths, 
@@ -126,9 +125,122 @@ def unit_match_sessions(paths_UM_inputs, param = PARAM):
     #save out extracted_wave_properties 
     return print(f'Completed Unitmatch. Saved outputs to: {UM_out_path}')
 
-def get_unitmatch_reports(subject = str, datetime1 = str, datetime2 = str):
-    UM_out_path = Path('../data/preprocessed_data/UnitMatch')/subject/f'{datetime1}x{datetime2}'
+def get_unitmatch_reports(pair):
+    '''INPUTS: unitmatch session pair info, from get_pairs_df(). 
+        Must contain:
+        pair['UM_out_path'],
+        pair['preprocessed_paths'],
+        pair['datetimes'],
+        
+       *must also have probe channel locations under 
+        '../data/preprocessed_data/spikesorting/probe_params/location.npy'
+        
+        OUTPUTS: a report for each match *across sessions*, for sanity checking.
+    '''
+        # Read relevant data:
+    try:
+        print('reading unitmatch outputs for reports')
+        UM_out_path = pair['UM_out_path']
+        match_df = pd.read_csv(UM_out_path/'MatchTable.csv')
+        clus_info = np.load(UM_out_path/'ClusInfo.pickle', allow_pickle=True)
+        wave_data = np.load((UM_out_path/'WaveformInfo.npz'))
+        channel_pos = np.load('../data/preprocessed_data/spikesorting/probe_params/location.npy')
+        match_df = match_df.query('`UM Probabilities`>0.5 and `RecSes 1`!= `RecSes 2`')
+    except:
+        raise print('Failed to read required inputs. Check folders.')
     
+    reports_dir = UM_out_path/'match_reports'
+    reports_dir.mkdir(exist_ok=True)
+    
+
+    if len(match_df) == 0:
+        print('No matches across sessions')
+        open(session_path/'UM_inputs'/"no_cross_matches.txt",'w').close() 
+    else:
+        for each_match in range(len(match_df)):
+            match_info = match_df.iloc[each_match]
+            prob = match_info['UM Probabilities']
+
+            #read out session and unit id data for avg waveform and centroid trajectories
+            unit_a_session = int(match_info['RecSes 1']-1)
+            unit_b_session = int(match_info['RecSes 2']-1)
+            unit_a_mask = (clus_info['original_ids']==match_info['ID1']).T*(clus_info['session_id']==unit_a_session)
+            unit_b_mask = (clus_info['original_ids']==match_info['ID2']).T*(clus_info['session_id']==unit_b_session)
+            wave_data_idx_a = np.argwhere(unit_a_mask[0]==True)[0][0]
+            wave_data_idx_b = np.argwhere(unit_b_mask[0]==True)[0][0]
+            wave_data_idxs = [wave_data_idx_a,wave_data_idx_b]
+            avg_wave = np.mean(wave_data['avg_waveform'],axis=2) #(n_timesteps, n_clusters), averaging over split halves or 'cv'
+            avg_pos = np.mean(wave_data['avg_waveform_per_tp'],axis=3) #(n_coords,n_clusters,n_timesteps)  
+            
+            #load analyzers for autocorrelograms and spike distributions
+            #this is using data computed and stored via spikesort_session.py
+            analyzer_a = si.load_sorting_analyzer(pair['preprocessed_paths'][unit_a_session]/'sorting_analyzer')
+            analyzer_b = si.load_sorting_analyzer(pair['preprocessed_paths'][unit_b_session]/'sorting_analyzer')
+            analyzers = [analyzer_a,analyzer_b]
+            analyzer_idxs = [int(match_info['ID1']),int(match_info['ID2'])]
+            
+            # PLOTTING:
+            # Set up the figure and axes.
+            fig = plt.figure(figsize=(10, 4))
+            subfigs = fig.subfigures(1, 2, wspace=0.07, width_ratios=[1,3]) #large column to left,
+            axsLeft = subfigs[0].subplots(1,1)
+            axs = subfigs[1].subplots(2,2)
+
+            #Add colour coded title text
+            
+            colours = plt.rcParams['axes.prop_cycle'].by_key()['color'] #blue is 0, orange is 1
+            subject = pair['preprocessed_paths'][0].parts[-2] #a bit finicky, but inherited from data structure
+            match_text = f'{round(match_info['UM Probabilities']*100,2)}% match \n {round(match_info['TotalScore'],3)} total score'
+            fig.text(0.1,1.05, match_text, 
+                    ha="center", va="bottom", size="large")
+
+            text_a = f'{subject}.{pair['datetimes'][0]}.cluster_{analyzer_idxs[0]}'
+            fig.text(0.4,1.05, text_a, ha="center", va="bottom", size="large",color=colours[0])
+
+            text_b = f'{subject}.{pair['datetimes'][1]}.cluster_{analyzer_idxs[1]}'
+            fig.text(0.8,1.05, text_b, ha="center", va="bottom", size="large",color=colours[1])
+
+
+            for each_unit in range(2):
+                axsLeft.set(title='Waveform templates')
+                sw.plot_unit_waveforms(analyzers[each_unit], plot_waveforms=True, plot_templates=True,
+                            alpha_waveforms = 0.001, alpha_templates = 0.5,
+                            unit_ids=[analyzer_idxs[each_unit]], 
+                            unit_colors={analyzer_idxs[each_unit]:colours[each_unit]}, 
+                            set_title=False, plot_legend=False,
+                            backend='matplotlib',same_axis=True, **{'ax':axsLeft})
+                
+                axs[0,0].set(title='Average waveforms')
+                axs[0,0].plot(avg_wave[:,wave_data_idxs[each_unit]])
+                
+                axs[1,0].set(title = 'Average centroid')
+                #first we want to plot on a scaffold of channel locations around the centroid
+                max_channel_idx = wave_data['max_site'][wave_data_idxs[each_unit],0]
+                axs[1,0].scatter(x=channel_pos[(max_channel_idx-4):(max_channel_idx+4),0],
+                            y=channel_pos[(max_channel_idx-4):(max_channel_idx+4),1],
+                            marker = 's', color='gray')
+                axs[1,0].scatter(x=avg_pos[1,wave_data_idxs[each_unit],:],
+                            y=avg_pos[2,wave_data_idxs[each_unit],:],
+                            alpha=0.3,
+                            color = colours[each_unit])
+            
+                axs[0,1].set(title='Spike amplitude distributions')
+                sw.plot_amplitudes(analyzers[each_unit], plot_histograms=False, plot_legend=False,
+                            unit_ids=[analyzer_idxs[each_unit]], 
+                            unit_colors={analyzer_idxs[each_unit]:colours[each_unit]}, 
+                        backend='matplotlib', **{'ax':axs[0,1]} )
+                for artist in axs[0,1].collections:
+                    artist.set_alpha(0.3)  # Adjust alpha for all scatter points
+
+                #lineplot autocorrelograms
+                axs[1,1].set(title='Normalised AutoCorrelogram')
+                corr_data = analyzers[each_unit].get_extension('correlograms').get_data()
+                bins = corr_data[1]  # Time bins for correlograms
+                corr_values = corr_data[0][analyzer_idxs[each_unit], analyzer_idxs[each_unit], :]  # CCG values for the specific unit pair
+                corr_normalised = corr_values/max(corr_values)
+                axs[1,1].plot(bins[:-1], corr_normalised, linestyle='-', alpha=0.5)
+
+            fig.savefig(reports_dir/f'{text_a}x{text_b}.png', bbox_inches="tight")
 
 ## Unit match subfunctions 
 
@@ -270,20 +382,15 @@ def get_um_paths_df():
     excluded_datetimes = []
     for each_subject in um_paths_df['subject_ID'].unique():
         subject_df = um_paths_df[um_paths_df['subject_ID']==each_subject]
-        subject_df.loc['datetime'] = subject_df['datetime'].apply(lambda x: x.isoformat())
-        datetimes = subject_df['datetime']
-        for datetime in datetimes:
-            print(datetime)
-            session_path = sps.SPIKESORTING_PATH/each_subject/str(datetime)
+        for datetime in subject_df['datetime']:
+            session_path = sps.SPIKESORTING_PATH/each_subject/datetime.isoformat()
             um_labels = sps.pd.read_csv(session_path/'UM_inputs'/'cluster_group.tsv', sep='\t')
             if sum(um_labels.KSLabel=='good') == 0:
                 open(session_path/'UM_inputs'/"no_good_units.txt",'w').close() 
                 excluded_datetimes.append(datetime)
     um_paths_df = um_paths_df[~um_paths_df['datetime'].isin(excluded_datetimes)]
     print(f'Excluded {len(excluded_datetimes)} sessions due to no good units')
-    um_paths_df.loc['preprocessed_path']=um_paths_df['ephys_path'].apply(lambda x: sps.SPIKESORTING_PATH/Path(x).parts[-2]/Path(x).parts[-1])
-    um_paths_df.loc['UM_inputs_path']=um_paths_df['preprocseed_path'].apply(lambda x: x/'UM_inputs')
-    um_paths_df.loc['date'] = um_paths_df['datetime'].apply(lambda x: x.date())
+    um_paths_df['date'] = um_paths_df.loc[:,'datetime'].apply(lambda x: x.date())
     
     return um_paths_df
 
@@ -316,40 +423,32 @@ def pad_UM_inputs(preprocessed_path):
     return
 
  
+## some utilities
+
+def get_pairs_df(subject:str):
+    '''INPUT: subject string such as 'mEC_2'.
+    OUTPUT: a dataframe with all pairs of sessions with the following columns:#
+     'datetimes': (datetime1,datetime2) isoformat tuple.
+     'UM_out_path': .../preprocessed_data/UnitMatch/subject/datetime1xdatetime2 '''
+     
+    um_paths_df = get_um_paths_df()
+    subject_df = um_paths_df[um_paths_df['subject_ID']==subject]
+    datetimes = list(combinations(subject_df['datetime'].apply(lambda x: x.isoformat()),2))
+
+    pairs_df = pd.DataFrame({'datetimes': datetimes})
+    pairs_df['datetime1'] = pairs_df.loc[:,'datetimes'].apply(lambda x: x[0])
+    pairs_df['datetime2'] = pairs_df.loc[:,'datetimes'].apply(lambda x: x[1])
+    
+    pairs_df['preprocessed_paths'] = pairs_df.loc[:,'datetimes'].apply(lambda x: 
+        (sps.SPIKESORTING_PATH/subject/x[0],sps.SPIKESORTING_PATH/subject/x[1]))
+
+    pairs_df['UM_input_paths'] = pairs_df.loc[:,'preprocessed_paths'].apply(lambda x:
+        [x[0]/'UM_inputs',x[1]/'UM_inputs'])
+
+    pairs_df['UM_out_path'] = pairs_df.loc[:,'datetimes'].apply(lambda x: 
+        sps.SPIKESORTING_PATH.parent/'UnitMatch'/subject/f'{x[0]}x{x[1]}')
+    return pairs_df
 
 
 ## Development // debugging
 
-def send_test_jobs(subject = 'mEC_2', date_str='2024-02-20'):
-    '''Sends jobs for an individual subject and date for kilosort preprocessing.
-    Also saves out unit match inputs'''
-    ephys_df = sps.get_ephys_paths_df()
-    ephys_df['date'] = ephys_df['datetime'].apply(lambda x: x.date())
-    subject_df = ephys_df[ephys_df['subject_ID']==subject]
-    sessions_df = subject_df[subject_df['date']==date.fromisoformat(date_str)]
-    for each_session in range(len(sessions_df)): #hardcoding here is a bit ugly, but go find a few within day sessions.
-        ephys_info = sessions_df.iloc[each_session]   
-        if ephys_info['spike_interface_readable'] == True:
-            run_e.submit_test_job(ephys_info)
-    return print('Submitted a few jobs to test preprocessing')
-
-def test_unit_match():
-    ephys_df = sps.get_ephys_paths_df()
-    ephys_df = ephys_df.sort_values(by=['datetime'])
-    sessions_paths =  []
-    for index in [19,20]:
-        ephys_info = ephys_df.iloc[index]
-        sessions_paths.append(ephys_info['ephys_path'])
-
-def hack_cluster_group(preprocessed_path):
-    '''A bit of a hack to get around UM issue for all units.'''
-
-def save_cluster_group(preprocessed_path, hack=False):
-    read_path = preprocessed_path/'kilosort4'/'sorter_output'/'cluster_group.tsv'
-    save_path = preprocessed_path/'UM_inputs'/'cluster_group.tsv'
-    cluster_group_df = pd.read_csv(read_path,sep='\t')
-    if hack == True:
-            cluster_group_df['KSLabel'] = 'good'
-    cluster_group_df.to_csv(save_path, sep='\t', index=False)
-    
-    return print('Copied over cluster group')
