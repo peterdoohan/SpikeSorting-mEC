@@ -29,8 +29,6 @@ import UnitMatchPy.extract_raw_data as erd
 
 
 
-
-
 # %% Global Variables
 EPHYS_PATH = Path(
     "../data/raw_data/ephys"
@@ -39,6 +37,7 @@ SPIKESORTING_PATH = Path(
     "../data/preprocessed_data/spikesorting"
 )  # Path("/Volumes/behrens/peter_doohan/goalNav_opto-mFC/ephys_control/data/preprocessed_data/spikesorting")
 
+PROBE = 'CambridgeNeurotech' #Neuropixel1 #Neuropixel2
 SAMPLING_FREQUENCY = 30000 #30kHz sampling rate used for AP data.
 
 si.set_global_job_kwargs(n_jobs=80, chunk_duration="1s", progress_bar=True)
@@ -542,7 +541,7 @@ def get_ephys_paths_df():
                 rec = se.read_openephys(path, stream_id=stream_id)
                 if rec.sampling_frequency != SAMPLING_FREQUENCY:
                     raise print(f'Data sampled at {rec.sampling_frequency}, not matching expected frequency.')
-                duration_min = rec.get_num_frames() / (SAMPLING_RATE*60)
+                duration_min = rec.get_num_frames() / (SAMPLING_FREQUENCY*60)
                 spike_interface_readable = True
             except:
                 spike_interface_readable = False
