@@ -2,6 +2,8 @@
 Primarily based off of UMPy_spike_interface_demo.ipynb.
 Integrated with other scripts to spikesort from raw data collected using open_ephys.
 Notably, inherits paths from spikesort_session.
+
+The script here primarily functions at pre-processing level to get pair-wise unitmatch reports
 @charlesdgburns"""
 
 import os
