@@ -5,8 +5,7 @@
 import os
 import json
 from pathlib import Path
-from datetime import datetime
-from datetime import date
+import numpy as np
 
 from . import spikesort_session as sps
 from . import run_ephys_preprocessing as rep
@@ -17,56 +16,48 @@ import seaborn as sns
 
 ## Global variables
 SPIKESORTING_PATH = Path("../data/preprocessed_data/spikesorting") 
-# INPUT should only be the range of dates for the experiment. 
-# Define the date range
-dates_dict = {'FIRST':date.fromisoformat('2024-02-20'),
-             'LAST':date.fromisoformat('2024-04-15')}
 
-# We then want to run kilosort with a few test parameters
+# We want to run kilosort with a few test parameters
 param_dict = {'lower':[7,6],
               'default':[9,8],
               'higher':[11,10],
-              'highest':[13,12]}
+              'highest':[13,12],
+              'skip_IBL':[9,8]} # default parameters when skipping preprocessing
 # on the longest session of each subject on the first and last day of the experiment.
 
 
 # %% functions
 
-def submit_jobs():
-    '''Submits a bunch of jobs via SLURM to kilosort each session at each set of parameters.'''
-    sample_paths_df = get_sample_paths_df() #Get first and last session info
-
+def submit_jobs(import_path = 'SpikeSorting', jobs_folder = rep.JOBS_FOLDER, python_path = '.'):
+    '''Submits a bunch of jobs via SLURM to kilosort each session at each set of parameters.
+    NB: import_path shouldn't be changed unless testing.'''
+    sample_paths_df = sps.get_first_last_df() #Get first and last session info
+    
     #Make a separate directory for each set of Th parameters.
     for subfolder  in param_dict.keys():
-        kilosort_Ths = param_dict['subfolder']
+        kilosort_Ths = param_dict[f'{subfolder}']
         spikesorting_path = SPIKESORTING_PATH/'kilosort_optim'/subfolder
         if not spikesorting_path.exists():
             spikesorting_path.mkdir(parents=True)
 
         print(f"For {subfolder} kilosort parameter settings ({kilosort_Ths}):")
+        if subfolder =='skip_IBL':
+            IBL_preprocessing = False
+        else:
+            IBL_preprocessing = True
         for each_session in range(len(sample_paths_df)):
             ephys_info = sample_paths_df.iloc[each_session]
             #We want to submit a bunch of jobs
             script_path = rep.get_ephys_preprocessing_SLURM_script(ephys_info, 
+                                                              IBL_preprocessing=IBL_preprocessing,
                                                               kilosort_Ths = kilosort_Ths,
-                                                              spikesort_path=spikesorting_path)
+                                                              spikesort_path=spikesorting_path,
+                                                              import_path = import_path,
+                                                              jobs_folder = jobs_folder,
+                                                              python_path=python_path)
             os.system(f"chmod +x {script_path}")
             os.system(f"sbatch {script_path}")
             print(f"Test job submitted for {ephys_info.subject_ID} {ephys_info['datetime'].isoformat()}")
-
-def get_sample_paths_df():
-    '''INPUT: the start and end date of the experiment, in datetime format.
-        OUTPUT: paths_df for the longest readable session on the first and last day for each mouse.
-    '''
-    df = sps.get_ephys_paths_df()
-    df['date'] = df['datetime'].apply(lambda x: x.date())  # Create a column of dates
-    df_filtered = df[((df['date']==dates_dict['FIRST']) | 
-                      (df['date']==dates_dict['LAST'])) & 
-                      (df['spike_interface_readable']==True)]
-    # Get the row with the maximum duration_min for each of the two dates (start and end)
-    df_filtered['date'] = df_filtered['datetime'].dt.date #ignore time
-    sample_paths_df = df_filtered.loc[df_filtered.groupby(['subject_ID','date'])['duration_min'].idxmax()]
-    return sample_paths_df
 
 #Functions for plotting
 
@@ -100,26 +91,39 @@ def get_optim_df():
     '''Generates dataframe for the optimisation process.
     This is based off of directories, which checks progress and is useful for later.'''
     optim_info = []
-    for subfolder in ['lower','default','higher','highest']:
+    for subfolder in ['skip_IBL','lower','default','higher','highest']:
         spikesorting_path = sps.SPIKESORTING_PATH/'kilosort_optim'/subfolder   
         for each_subject in os.listdir(spikesorting_path):
             for each_session in os.listdir((spikesorting_path/each_subject)):
-                session_path = spikesorting_path/each_subject/each_session
-                session_label = 'first' if datetime.fromisoformat(session_path.parts[-1]).date()==dates_dict['FIRST'] else 'last'
-                completed = (session_path/'DONE.txt').exists()
-                #count kilosort 'n_good' and IBL qualtiy control 'n_single'
-                ks_labels = sps.pd.read_csv(session_path/'kilosort4'/'sorter_output'/'cluster_KSLabel.tsv', sep='\t')
-                good_clusters = ks_labels[ks_labels.KSLabel=='good']
-                qual_df = sps.pd.read_csv(session_path/'quality_metrics.htsv', sep='\t')
-                single_units = sps.get_single_units(qual_df)
-                #save out info to dictionary
-                optim_info.append({'subject_ID': each_subject,
-                                   'session': session_label,
-                                    'ks_params':subfolder,
-                                    'completed':completed,
-                                    'n_good':len(good_clusters),
-                                    'n_single':len(single_units),
-                                    'session_path':session_path,})
+                probes = [x for x in os.listdir(spikesorting_path/each_subject/each_session) if 'probe' in x]
+                if len(probes) == 0:
+                    probes.append('single_probe')
+                for each_probe in probes:
+                    if each_probe == 'single_probe':  
+                        session_path = spikesorting_path/each_subject/each_session  
+                    else:
+                        session_path = spikesorting_path/each_subject/each_session/each_probe
+                    
+                    all_session_dates = np.sort([x.parts[-1] for x in (spikesorting_path/each_subject).iterdir()])
+                    session_label = 'first' if each_session == all_session_dates[0] else 'last'
+                    completed = (session_path/'DONE.txt').exists()
+                    #count kilosort 'n_good' and IBL qualtiy control 'n_single'
+                    try:
+                        ks_labels = sps.pd.read_csv(session_path/'kilosort4'/'sorter_output'/'cluster_KSLabel.tsv', sep='\t')
+                    except:
+                        print(f'missing kilosort output for {session_path}')
+                        continue
+                    good_clusters = ks_labels[ks_labels.KSLabel=='good']
+                    qual_df = sps.pd.read_csv(session_path/'quality_metrics.htsv', sep='\t')
+                    single_units = sps.get_single_units(qual_df)
+                    #save out info to dictionary
+                    optim_info.append({'subject_ID': each_subject,
+                                    'session': session_label,
+                                        'ks_params':subfolder,
+                                        'completed':completed,
+                                        'n_good':len(good_clusters),
+                                        'n_single':len(single_units),
+                                        'session_path':session_path,})
     optim_df = sps.pd.DataFrame(optim_info)
     return optim_df
 
@@ -128,7 +132,6 @@ def plot_unit_counts(optim_df):
        OUTPUT: a png in ../data/preprocessing/spikesorting/optimise_kilosort.'''
     plot_df = optim_df.melt(id_vars=['session_path','ks_params','subject_ID','session'],
                 value_vars=['n_good','n_single'], var_name='inclusion', value_name='count')
-    import seaborn as sns
     g = sns.FacetGrid(plot_df, col='session', row='inclusion', hue='subject_ID')
     g.map(sns.scatterplot, "ks_params", "count")
     g.add_legend()
@@ -206,7 +209,7 @@ def submit_test():
   
     print(f"For {subfolder} kilosort parameter settings ({kilosort_Ths}):")
     
-    ephys_info = get_sample_paths_df().iloc[0]
+    ephys_info = sps.get_first_last_df().iloc[0]
     #Submit test job
     script_path = rep.get_ephys_preprocessing_SLURM_script(ephys_info, 
                                                         kilosort_Ths = kilosort_Ths,
