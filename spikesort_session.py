@@ -601,8 +601,9 @@ def pad_unitmatch_inputs(raw_rec, preprocessed_path):
             n_pad = max_n_channels - raw_spikes.shape[1]
             raw_spikes_padded = np.concatenate([raw_spikes, np.zeros((raw_spikes.shape[0], n_pad, raw_spikes.shape[2]))], axis=1)
             # Save the padded data, overwriting the original files
-            np.save(unit_file, raw_spikes_padded)  # Overwrite the raw spikes file 
-    return
+            np.save(unit_file, raw_spikes_padded)  # Overwrite the raw spikes file
+
+    return print(f'checked padding for unitmatch inputs at {preprocessed_path}')
 
 # %% _0. Handling probe and recording information
 
