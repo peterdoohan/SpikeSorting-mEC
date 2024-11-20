@@ -7,6 +7,7 @@ The script here primarily functions at pre-processing level to get pair-wise uni
 @charlesdgburns"""
 
 import os
+import timeit
 from pathlib import Path
 from datetime import date
 from itertools import combinations
@@ -345,6 +346,8 @@ def get_unitmatch_reports(pair):
         open(reports_dir/"no_cross_matches.txt",'w').close() 
     else:
         print('Saving out a report for each match')
+        
+        inputs = []
         for index, match_info in match_df.iterrows():
             
             #read out session and unit id data for avg waveform and centroid trajectories
@@ -365,40 +368,38 @@ def get_unitmatch_reports(pair):
             analyzers = [analyzer_a,analyzer_b]
             analyzer_idxs = [int(match_info['ID1']),int(match_info['ID2'])]
             
-            # PLOTTING:
+            #Add colour coded title text
+            colours = plt.rcParams['axes.prop_cycle'].by_key()['color'] #blue is 0, orange is 1
+            subject = pair['preprocessed_paths'][0].parts[-2] #a bit finicky, but inherited from data structure
+            match_text = f'{round(match_info['UM Probabilities']*100,2)}% match \n {round(match_info['TotalScore'],3)} total score'
+            
+            #NB: changes to this text will need to coordinated with preprocessed_data level unitmatching
+            text_a = f'{subject}.{pair['datetimes'][unit_a_session]}.cluster_{analyzer_idxs[0]}'
+            text_b = f'{subject}.{pair['datetimes'][unit_b_session]}.cluster_{analyzer_idxs[1]}'
+            print(f'Figure info {index}')#
+            
             # Set up the figure and axes.
             fig = plt.figure(figsize=(10, 4))
             subfigs = fig.subfigures(1, 2, wspace=0.07, width_ratios=[1,3]) #large column to left,
             axsLeft = subfigs[0].subplots(1,1)
             axs = subfigs[1].subplots(2,2)
-
-            #Add colour coded title text
-            colours = plt.rcParams['axes.prop_cycle'].by_key()['color'] #blue is 0, orange is 1
-            subject = pair['preprocessed_paths'][0].parts[-2] #a bit finicky, but inherited from data structure
             
-            match_text = f'{round(match_info['UM Probabilities']*100,2)}% match \n {round(match_info['TotalScore'],3)} total score'
             fig.text(0.1,1.05, match_text, 
-                    ha="center", va="bottom", size="large")
-
-            text_a = f'{subject}.{pair['datetimes'][unit_a_session]}.cluster_{analyzer_idxs[0]}'
+                            ha="center", va="bottom", size="large")
             fig.text(0.4,1.05, text_a, ha="center", va="bottom", size="large",color=colours[0])
-
-            text_b = f'{subject}.{pair['datetimes'][unit_b_session]}.cluster_{analyzer_idxs[1]}'
             fig.text(0.8,1.05, text_b, ha="center", va="bottom", size="large",color=colours[1])
-
 
             for each_unit in range(2):
                 axsLeft.set(title='Waveform templates')
                 sw.plot_unit_waveforms(analyzers[each_unit], plot_waveforms=True, plot_templates=True,
-                            alpha_waveforms = 0.001, alpha_templates = 0.5,
-                            unit_ids=[analyzer_idxs[each_unit]], 
-                            unit_colors={analyzer_idxs[each_unit]:colours[each_unit]}, 
-                            set_title=False, plot_legend=False,
-                            backend='matplotlib',same_axis=True, **{'ax':axsLeft})
-                
+                                    alpha_waveforms = 0.001, alpha_templates = 0.5,
+                                    unit_ids=[analyzer_idxs[each_unit]], 
+                                    unit_colors={analyzer_idxs[each_unit]:colours[each_unit]}, 
+                                    set_title=False, plot_legend=False,
+                                    backend='matplotlib',same_axis=True, **{'ax':axsLeft})
+                        
                 axs[0,0].set(title='Average waveforms')
                 axs[0,0].plot(avg_wave[:,wave_data_idxs[each_unit]])
-                
                 axs[1,0].set(title = 'Average centroid')
                 #first we want to plot on a scaffold of channel locations around the centroid
                 max_channel_idx = wave_data['max_site'][wave_data_idxs[each_unit],0]
@@ -414,10 +415,9 @@ def get_unitmatch_reports(pair):
                 sw.plot_amplitudes(analyzers[each_unit], plot_histograms=False, plot_legend=False,
                             unit_ids=[analyzer_idxs[each_unit]], 
                             unit_colors={analyzer_idxs[each_unit]:colours[each_unit]}, 
-                        backend='matplotlib', **{'ax':axs[0,1]} )
+                        backend='matplotlib', **{'ax':axs[0,1]} )       
                 for artist in axs[0,1].collections:
-                    artist.set_alpha(0.3)  # Adjust alpha for all scatter points
-
+                            artist.set_alpha(0.3)  # Adjust alpha for all scatter points
                 #lineplot autocorrelograms
                 axs[1,1].set(title='Normalised AutoCorrelogram')
                 corr_data = analyzers[each_unit].get_extension('correlograms').get_data()
@@ -425,9 +425,8 @@ def get_unitmatch_reports(pair):
                 corr_values = corr_data[0][analyzer_idxs[each_unit], analyzer_idxs[each_unit], :]  # CCG values for the specific unit pair
                 corr_normalised = corr_values/max(corr_values)
                 axs[1,1].plot(bins[:-1], corr_normalised, linestyle='-', alpha=0.5)
-
             fig.savefig(reports_dir/f'{text_a}x{text_b}.png', bbox_inches="tight")
-
+   
 
 ## Local unit match utilities 
 
@@ -518,3 +517,80 @@ def get_pairs_df(subject:str):
 
 ## Development // debugging
 
+def test_pre_um():
+    start = timeit.default_timer()
+    pair = get_pairs_df('mEC_5').iloc[0]
+    print(f"Matching sessions {pair['datetimes']}")
+    UM_out_path = Path(pair['UM_out_path'])
+    UM_out_path.mkdir(parents=True,exist_ok=True)
+    for preprocessed_path in pair['preprocessed_paths']:
+        sps.save_unitmatch_labels(preprocessed_path)
+        pad_UM_inputs(preprocessed_path)
+    unit_match_sessions(pair['UM_input_paths'])
+    get_unitmatch_reports(pair)
+    end=timeit.default_timer()
+    return print(end-start)
+
+
+### PADDING UNITMATCH OUTPUTS AS A FIX FOR PRE-PROCESSED-DATA
+
+
+def pad_all_UM_inputs():
+    ''' Top level function to run unit match (for each subject) for each pair of sessions.
+    Submits jobs to clusters for each subject.'''
+    
+    for each_subject in sps.get_ephys_paths_df()['subject_ID'].unique():
+        # check jobs folder exits
+        for jobs_folder in ["slurm", "out", "err"]:
+            if not Path(f"SpikeSorting/jobs/{jobs_folder}").exists():
+                os.mkdir(f"SpikeSorting/jobs/{jobs_folder}")
+
+        print(f"Submitting {each_subject} padding to HPC")
+        script_path = get_padding_SLURM_script(subject=each_subject)
+        os.system(f"chmod +x {script_path}")
+        os.system(f"sbatch {script_path}")
+    return print("All ephys preprocessing jobs submitted to HPC. Check progress with 'squeue -u <username>'")
+
+
+def get_padding_SLURM_script(subject, RAM="64GB", time_limit="48:00:00"):
+    '''Writes out script to perform pairwise unit matching for all pairs of sessions
+    for a given subject.'''
+    subject_ID = f"{subject}"
+    script = f"""#!/bin/bash
+#SBATCH --job-name=unit_match_padding_{subject_ID}
+#SBATCH --output=SpikeSorting/jobs/out/unit_match_padding_{subject_ID}.out
+#SBATCH --error=SpikeSorting/jobs/err/unit_match_padding_{subject_ID}.err
+#SBATCH --ntasks-per-node=1
+#SBATCH --cpus-per-task=10
+#SBATCH --mem={RAM}
+#SBATCH --time={time_limit}
+
+source $(conda info --base)/etc/profile.d/conda.sh
+module load miniconda
+module load cuda/11.8
+conda deactivate
+conda activate maze_ephys
+
+python -c \"
+import SpikeSorting.unit_matching as um
+print('Padding UnitMatch inputs for {subject_ID}')
+um.pad_subject_UM_inputs('{subject_ID}')
+\"
+"""
+    script_path = f"SpikeSorting/jobs/slurm/unit_match_padding_{subject_ID}.sh"
+    with open(script_path, "w") as f:
+        f.write(script)
+    return script_path
+
+def pad_subject_UM_inputs(subject_ID):
+    ephys_df = sps.get_ephys_paths_df()
+    subject_df = ephys_df.query(f"subject_ID=='{subject_ID}' and spike_interface_readable==True and spike_sorting_completed==True")
+    print(f'Padding for a total of {len(subject_df)} sessions')
+
+    for i in range(len(subject_df)):
+        ephys_info= subject_df.iloc[i]
+        raw_recs, preprocessed_paths = sps.get_probe_recordings(ephys_info['subject_ID'],
+                                                            ephys_info['datetime'].isoformat(),
+                                                            ephys_info['ephys_path'])
+        for raw_rec, preprocessed_path in zip(raw_recs,preprocessed_paths):
+            sps.pad_unitmatch_inputs(raw_rec,preprocessed_path)

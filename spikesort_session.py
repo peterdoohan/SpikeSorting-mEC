@@ -118,7 +118,7 @@ def preprocess_ephys_session(subject_ID, datetime, ephys_path, #Required inputs
             single_units = get_single_units(quality_metrics_df)
             print(f"Found {len(single_units)} single units, passing quality control")
             print('Saving out waveforms for UnitMatch.')
-            save_unitmatch_inputs(preprocessed_rec, preprocessed_path)
+            save_unitmatch_inputs(raw_rec, preprocessed_rec, preprocessed_path)
             # Remove temp files
             if remove_cached_data:
                 for temp_folder in ["temp_preprocessed", "sorting_analyser"]:
@@ -601,8 +601,9 @@ def pad_unitmatch_inputs(raw_rec, preprocessed_path):
             n_pad = max_n_channels - raw_spikes.shape[1]
             raw_spikes_padded = np.concatenate([raw_spikes, np.zeros((raw_spikes.shape[0], n_pad, raw_spikes.shape[2]))], axis=1)
             # Save the padded data, overwriting the original files
-            np.save(unit_file, raw_spikes_padded)  # Overwrite the raw spikes file 
-    return
+            np.save(unit_file, raw_spikes_padded)  # Overwrite the raw spikes file
+
+    return print(f'checked padding for unitmatch inputs at {preprocessed_path}')
 
 # %% _0. Handling probe and recording information
 
