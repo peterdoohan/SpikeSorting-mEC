@@ -118,7 +118,7 @@ def preprocess_ephys_session(subject_ID, datetime, ephys_path, #Required inputs
             single_units = get_single_units(quality_metrics_df)
             print(f"Found {len(single_units)} single units, passing quality control")
             print('Saving out waveforms for UnitMatch.')
-            save_unitmatch_inputs(preprocessed_rec, preprocessed_path)
+            save_unitmatch_inputs(raw_rec, preprocessed_rec, preprocessed_path)
             # Remove temp files
             if remove_cached_data:
                 for temp_folder in ["temp_preprocessed", "sorting_analyser"]:
