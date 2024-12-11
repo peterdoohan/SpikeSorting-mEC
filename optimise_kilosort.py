@@ -28,7 +28,7 @@ param_dict = {'lower':[7,6],
 
 # %% functions
 
-def submit_jobs(import_path = 'SpikeSorting', jobs_folder = rep.JOBS_FOLDER, python_path = '.'):
+def submit_jobs(jobs_folder = rep.JOBS_FOLDER, python_path = '.'):
     '''Submits a bunch of jobs via SLURM to kilosort each session at each set of parameters.
     NB: import_path shouldn't be changed unless testing.'''
     sample_paths_df = sps.get_first_last_df() #Get first and last session info
@@ -52,7 +52,6 @@ def submit_jobs(import_path = 'SpikeSorting', jobs_folder = rep.JOBS_FOLDER, pyt
                                                               IBL_preprocessing=IBL_preprocessing,
                                                               kilosort_Ths = kilosort_Ths,
                                                               spikesort_path=spikesorting_path,
-                                                              import_path = import_path,
                                                               jobs_folder = jobs_folder,
                                                               python_path=python_path)
             os.system(f"chmod +x {script_path}")
