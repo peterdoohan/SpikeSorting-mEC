@@ -57,7 +57,7 @@ import UnitMatchPy.extract_raw_data as erd
 SAMPLING_FREQUENCY = 30000 #30kHz sampling rate used for AP data. This is used to check that the correct data is loaded.
 # For probe checks you may want to manually specify dates where recordings exist for all subjects
 # see also get_first_last_df()
-MANUAL_START_DATE = None #None or date object such as date(1970,1,1) 
+MANUAL_START_DATE = date(2024,2,20) #None or date object such as date(1970,1,1) 
 MANUAL_END_DATE = None #None or date object such as date(2012,12,02)
 
 # %% Global Variables 
@@ -489,7 +489,7 @@ def get_single_units(
     firing_rate_thres=0.1,
     presence_ratio_thres=0.9,
     amplitude_median_thres=50,
-    sd_ratio_thres=3,
+    sd_ratio_thres=3
 ):
     """
     Filter sortered clusters by quality metrics to find single units (clusters that pass QC metrics)

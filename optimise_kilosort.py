@@ -90,8 +90,9 @@ def summarise_results():
 def get_optim_df():
     '''Generates dataframe for the optimisation process.
     This is based off of directories, which checks progress and is useful for later.'''
+    first_last_df = sps.get_first_last_df() #this is a reference/backbone for generating the paths
     optim_info = []
-    for subfolder in ['skip_IBL','lower','default','higher','highest']:
+    for subfolder in ['lower','default','higher','highest']:
         spikesorting_path = sps.SPIKESORTING_PATH/'kilosort_optim'/subfolder   
         for each_subject in os.listdir(spikesorting_path):
             for each_session in os.listdir((spikesorting_path/each_subject)):
@@ -103,9 +104,11 @@ def get_optim_df():
                         session_path = spikesorting_path/each_subject/each_session  
                     else:
                         session_path = spikesorting_path/each_subject/each_session/each_probe
-                    
-                    all_session_dates = np.sort([x.parts[-1] for x in (spikesorting_path/each_subject).iterdir()])
-                    session_label = 'first' if each_session == all_session_dates[0] else 'last'
+                    #we need to check whether the current session corresponds to 'first' or 'last' session:
+                    subject_paths_df = first_last_df.query(f'subject_ID == "{each_subject}"').datetime.apply(lambda x: x.isoformat())
+                    subject_dates = np.sort([Path(x).parts[-1] for x in subject_paths_df])
+                    print(each_session,subject_dates)
+                    session_label = 'first' if each_session == subject_dates[0] else 'last'
                     completed = (session_path/'DONE.txt').exists()
                     #count kilosort 'n_good' and IBL qualtiy control 'n_single'
                     try:
