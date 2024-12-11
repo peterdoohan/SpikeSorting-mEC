@@ -30,6 +30,7 @@ import numpy as np
 import pandas as pd
 from pathlib import Path
 from datetime import datetime
+from datetime import date
 from matplotlib import pyplot as plt
 
 #for preprocessing and kilosort
@@ -54,6 +55,10 @@ import UnitMatchPy.extract_raw_data as erd
 # %% MANUAL SETUP / INPUTS 
 
 SAMPLING_FREQUENCY = 30000 #30kHz sampling rate used for AP data. This is used to check that the correct data is loaded.
+# For probe checks you may want to manually specify dates where recordings exist for all subjects
+# see also get_first_last_df()
+MANUAL_START_DATE = None #None or date object such as date(1970,1,1) 
+MANUAL_END_DATE = None #None or date object such as date(2012,12,02)
 
 # %% Global Variables 
 # Paths should not be changed if data is structured as expected and if current directory is path/to/experiment/code
@@ -820,8 +825,13 @@ def get_ephys_paths_df():
             dt = datetime.strptime(datetime_string, "%Y-%m-%d_%H-%M-%S")
             spike_sorting_completed =(SPIKESORTING_PATH/subject_ID/dt.isoformat()/"DONE.txt").exists()
             completion.append(spike_sorting_completed)
-        ephys_paths_df['spike_sorting_completed'] = completion
-    else: #otherwise generate dataframe from scratch
+        try: #this will fail if more data has been uploaded:
+            ephys_paths_df['spike_sorting_completed'] = completion
+        except:
+            print(f'More data ({len(completion)} files) has been uploaded since last dataframe generation ({len(ephys_paths_df)} files).\n Generating ephys_paths_df from scratch.')
+            os.remove((EPHYS_PATH/"ephys_paths_df.tsv")) #delete's dataframe so a new will be generated.            
+    #Separate if statement in case more data is uploaded, which would be caught above^
+    if not (EPHYS_PATH/"ephys_paths_df.tsv").exists(): 
         ephys_path_info = [] 
         for path in all_ephys_paths:
             subject_ID = path.parts[-2]
@@ -856,7 +866,9 @@ def get_ephys_paths_df():
     
     return ephys_paths_df
 
-def get_first_last_df(min_duration_min=20):
+def get_first_last_df(min_duration_min=20,
+                      manual_start_date = MANUAL_START_DATE,
+                      manual_end_date = MANUAL_END_DATE):
     '''
     INPUT: min_duration_min is the minimum duration of the recording to be included (optional)
     Ephys path df with data for the first and last day across subjects.
@@ -864,6 +876,11 @@ def get_first_last_df(min_duration_min=20):
     '''
     df = get_ephys_paths_df()
     df['date'] = df['datetime'].apply(lambda x: x.date()) #create a column of dates
+    if manual_start_date != None:
+        df = df[df['date']>=manual_start_date]
+    if manual_end_date != None:
+        df = df[df['date']<=manual_end_date]
+        
     indices = []
     for each_subject in df['subject_ID'].unique():
         subject_df = df.query(f'subject_ID == "{each_subject}" and duration_min>{min_duration_min} and spike_interface_readable==True')
