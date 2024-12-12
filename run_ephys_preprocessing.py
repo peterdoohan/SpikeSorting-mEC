@@ -44,13 +44,13 @@ def submit_test_job(ephys_info):
 
 def get_ephys_preprocessing_SLURM_script(ephys_info, spike_sorter="Kilosort4", RAM="64GB", time_limit="48:00:00", 
                                         IBL_preprocessing = True, kilosort_Ths=[9,8], spikesort_path = sps.SPIKESORTING_PATH,  #parameters relevant for optimising kilosort.
-                                        jobs_folder = JOBS_FOLDER, python_path = '.'): #options to edit jobs folder and python path when running tests.
+                                        jobs_folder = JOBS_FOLDER, python_path = '.', prefix = 'ephys_preprocessing'): #options to edit jobs folder and python path when running tests.
     '''Saves a script which submits a SLURM job to perform spikesorting.'''
     session_ID = f"{ephys_info.subject_ID}_{ephys_info.datetime.isoformat()}_{spike_sorter}"
     script = f"""#!/bin/bash
-#SBATCH --job-name=ephys_preprocessing_{session_ID}
-#SBATCH --output={str(jobs_folder)}/out/ephys_preprocessing_{session_ID}.out
-#SBATCH --error={str(jobs_folder)}/err/ephys_preprocessing_{session_ID}.err
+#SBATCH --job-name={prefix}_{session_ID}
+#SBATCH --output={str(jobs_folder)}/out/{prefix}_{session_ID}.out
+#SBATCH --error={str(jobs_folder)}/err/{prefix}_{session_ID}.err
 #SBATCH --ntasks-per-node=1
 #SBATCH --cpus-per-task=10
 #SBATCH -p gpu
@@ -68,7 +68,7 @@ conda activate maze_ephys
 
 PYTHONPATH='{python_path}' python -c \"import SpikeSorting.spikesort_session as sps; sps.preprocess_ephys_session('{ephys_info.subject_ID}', '{ephys_info.datetime.isoformat()}', '{ephys_info.ephys_path}', {IBL_preprocessing}, {kilosort_Ths}, spikesort_path='{spikesort_path}')\"
 """
-    script_path = f"{jobs_folder}/slurm/ephys_preprocessing_{session_ID}.sh"
+    script_path = f"{jobs_folder}/slurm/{prefix}_{session_ID}.sh"
     with open(script_path, "w") as f:
         f.write(script)
     return script_path

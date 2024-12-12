@@ -30,8 +30,12 @@ param_dict = {'lower':[7,6],
 
 def submit_jobs(jobs_folder = rep.JOBS_FOLDER, python_path = '.'):
     '''Submits a bunch of jobs via SLURM to kilosort each session at each set of parameters.
-    NB: import_path shouldn't be changed unless testing.'''
+    NB: python_path shouldn't be changed unless testing.'''
     sample_paths_df = sps.get_first_last_df() #Get first and last session info
+    
+    #If this is a rerun we want to delete best_params.json to avoid overwriting kilosort Ths when spikesorting.
+    if (SPIKESORTING_PATH/'kilosort_optim'/'best_params.json').exists():
+        os.remove(SPIKESORTING_PATH/'kilosort_optim'/'best_params.json')
     
     #Make a separate directory for each set of Th parameters.
     for subfolder  in param_dict.keys():
@@ -53,7 +57,8 @@ def submit_jobs(jobs_folder = rep.JOBS_FOLDER, python_path = '.'):
                                                               kilosort_Ths = kilosort_Ths,
                                                               spikesort_path=spikesorting_path,
                                                               jobs_folder = jobs_folder,
-                                                              python_path=python_path)
+                                                              python_path=python_path,
+                                                              prefix = f'kilosort_optim_{subfolder}')
             os.system(f"chmod +x {script_path}")
             os.system(f"sbatch {script_path}")
             print(f"Test job submitted for {ephys_info.subject_ID} {ephys_info['datetime'].isoformat()}")
@@ -91,7 +96,7 @@ def get_optim_df():
     This is based off of directories, which checks progress and is useful for later.'''
     first_last_df = sps.get_first_last_df() #this is a reference/backbone for generating the paths
     optim_info = []
-    for subfolder in ['lower','default','higher','highest']:
+    for subfolder in ['skip_IBL','lower','default','higher','highest']:
         spikesorting_path = sps.SPIKESORTING_PATH/'kilosort_optim'/subfolder   
         for each_subject in os.listdir(spikesorting_path):
             for each_session in os.listdir((spikesorting_path/each_subject)):
